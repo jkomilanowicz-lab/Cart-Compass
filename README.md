@@ -162,6 +162,10 @@ npm run e2e     # loads the real extension in Chromium against fixture pages (ne
 npm run package # zip the extension folder for the Chrome Web Store
 ```
 
+## Author
+
+Created and maintained by [@jkomilanowicz-lab](https://github.com/jkomilanowicz-lab).
+
 ## License
 
 [MIT](LICENSE)
