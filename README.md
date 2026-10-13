@@ -29,7 +29,10 @@ Everything runs in your own browser, signed in to your own AliExpress account. T
 | 📬 **Gmail backfill** *(optional)* | An Apps Script that builds a starter order list from your AliExpress emails. |
 | ⌨️ **No-install exporter** | A snippet you paste into the DevTools console on your orders page. |
 
-![Re-order warning on a product page](docs/screenshot-product-panel.png)
+<p align="center">
+  <img src="store/screenshot-1.png" alt="Re-order warning on a product page" width="49%">
+  <img src="store/screenshot-2.png" alt="Same part from a different store" width="49%">
+</p>
 
 ---
 
