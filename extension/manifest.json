@@ -1,0 +1,89 @@
+{
+  "manifest_version": 3,
+  "name": "Cart Compass – Order History & Re-order Alerts for AliExpress",
+  "version": "1.0.0",
+  "description": "Keeps a private record of every AliExpress order, warns before you buy something twice, and syncs to Google Sheets.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.aliexpress.com/*",
+    "*://*.aliexpress.us/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "https://script.google.com/*",
+    "https://script.googleusercontent.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Cart Compass",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.aliexpress.com/p/order/index.html*",
+        "*://*.aliexpress.us/p/order/index.html*"
+      ],
+      "js": [
+        "lib/core.js",
+        "lib/parsers.js",
+        "content/orders.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.aliexpress.com/p/order/detail.html*",
+        "*://*.aliexpress.us/p/order/detail.html*"
+      ],
+      "js": [
+        "lib/core.js",
+        "lib/parsers.js",
+        "content/detail.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://*.aliexpress.com/item/*",
+        "*://*.aliexpress.us/item/*",
+        "*://*.aliexpress.com/p/shoppingcart/*",
+        "*://*.aliexpress.us/p/shoppingcart/*",
+        "*://*.aliexpress.com/p/trade/confirm.html*",
+        "*://*.aliexpress.us/p/trade/confirm.html*"
+      ],
+      "js": [
+        "lib/core.js",
+        "content/reorder.js"
+      ],
+      "css": [
+        "content/reorder.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "short_name": "Cart Compass"
+}

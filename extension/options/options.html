@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Cart Compass – Settings</title>
+  <link rel="stylesheet" href="../popup/popup.css">
+  <style>
+    body { width: auto; max-width: 620px; margin: 24px auto; padding: 0 16px 40px; font-size: 14px; }
+    fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 16px 0; padding: 4px 14px 10px; }
+    legend { font-weight: 700; padding: 0 6px; }
+    #saved { transition: opacity .3s; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Cart Compass – Settings</h1>
+    <span id="saved" class="pill">Changes save automatically</span>
+  </header>
+
+  <fieldset>
+    <legend>Google Sheet (review copy)</legend>
+    <label>Web app URL (ends in /exec) <input id="sheetUrl" type="url" placeholder="https://script.google.com/macros/s/…/exec"></label>
+    <label>Sheet key (same value as SYNC_KEY in the script) <input id="sheetKey" type="password" autocomplete="off"></label>
+    <label>Sheet link (optional, for the popup's Open sheet button) <input id="sheetViewUrl" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
+    <label class="check"><input id="autoSheetSync" type="checkbox"> Auto-sync to the sheet after each save</label>
+    <div class="row">
+      <button id="btnSheetAccess">Allow access &amp; test sheet</button>
+    </div>
+    <p id="sheetMsg" class="muted"></p>
+  </fieldset>
+
+
+  <fieldset>
+    <legend>Sync</legend>
+    <label class="check"><input id="ignoreCancelled" type="checkbox"> Ignore cancelled/closed orders</label>
+    <label>Detail pages per "Fetch details" run <input id="detailBatchLimit" type="number" min="1" max="500"></label>
+  </fieldset>
+
+  <fieldset>
+    <legend>Clean up AliExpress order list</legend>
+    <label>Only remove orders older than (days) <input id="cleanupMinAgeDays" type="number" min="0" max="3650"></label>
+    <label class="check"><input id="cleanupCancelled" type="checkbox"> Also remove cancelled/closed orders</label>
+    <p class="muted">Clean-up deletes completed orders from your online AliExpress list, but only after they're fetched in full and confirmed in your Google Sheet. They stay saved in this extension and in the sheet.</p>
+  </fieldset>
+
+  <script src="options.js"></script>
+</body>
+</html>

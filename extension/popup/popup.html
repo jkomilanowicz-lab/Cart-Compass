@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Cart Compass</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Cart Compass</h1>
+  </header>
+
+  <section id="stats" class="stats"></section>
+
+  <section>
+    <h2>Sync from AliExpress</h2>
+    <div class="row">
+      <button id="btnQuick" title="Load orders until nothing new appears">Quick sync</button>
+      <button id="btnFull" title="Load every order (clicks “View orders” until the end)">Full sync</button>
+    </div>
+    <div class="row">
+      <button id="btnDeep" title="Open order detail pages in background tabs for full titles, prices, tracking">Fetch details</button>
+      <button id="btnRefetch" class="ghost" title="Re-read every order's detail page (picks up tax/discount for orders fetched by older versions)">Re-fetch all details</button>
+      <button id="btnStopDeep" class="ghost hidden">Stop</button>
+    </div>
+    <p id="syncStatus" class="muted"></p>
+    <p id="deepStatus" class="muted"></p>
+    <p id="syncInfo" class="muted"></p>
+  </section>
+
+  <section>
+    <h2>Export</h2>
+    <div class="row">
+      <button id="btnJson" class="ghost">Export JSON</button>
+      <button id="btnCsv" class="ghost">Export CSV</button>
+      <label class="ghost button">Import JSON<input id="fileImport" type="file" accept=".json,application/json" hidden></label>
+    </div>
+    <p id="importStatus" class="muted"></p>
+  </section>
+
+  <section>
+    <h2>Google Sheet</h2>
+    <div class="row">
+      <button id="btnSheet">Sync to Google Sheet</button>
+      <button id="btnOpenSheet" class="ghost hidden">Open sheet</button>
+    </div>
+    <p id="sheetStatus" class="muted"></p>
+  </section>
+
+
+  <section>
+    <h2>Clean up AliExpress order list</h2>
+    <p class="muted">Deletes old completed orders from your <em>online</em> AliExpress order list once they're confirmed in your Google Sheet, so the list (and every sync) stays short. They stay saved here and in the sheet, so re-order warnings keep working.</p>
+    <div class="row">
+      <button id="btnCleanPlan" class="ghost">Find orders to remove</button>
+      <button id="btnCleanOne" class="hidden">Remove 1 (test)</button>
+      <button id="btnCleanAll" class="danger hidden">Remove all</button>
+    </div>
+    <p id="cleanStatus" class="muted"></p>
+  </section>
+
+  <div class="row">
+    <button id="btnSettings" class="ghost">⚙ Settings</button>
+  </div>
+
+  <details>
+    <summary>Troubleshooting</summary>
+    <p class="muted">If orders or prices aren't detected correctly, open the AliExpress page in question, click below, and attach the result to a GitHub issue. Personal details are filtered out, but skim it before sharing.</p>
+    <div class="row">
+      <button id="btnSample" class="ghost">Copy page sample</button>
+      <button id="btnClear" class="danger">Clear local data</button>
+    </div>
+  </details>
+
+  <script src="../lib/core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

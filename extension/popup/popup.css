@@ -1,0 +1,38 @@
+:root {
+  --bg: #ffffff; --fg: #111827; --muted: #6b7280; --line: #e5e7eb; --accent: #e62e04; --btn: #f3f4f6; --ok: #15803d; --bad: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111827; --fg: #f3f4f6; --muted: #9ca3af; --line: #374151; --btn: #1f2937; }
+}
+* { box-sizing: border-box; }
+body { width: 360px; margin: 0; padding: 12px 14px; background: var(--bg); color: var(--fg); font: 13px/1.4 -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+header { display: flex; align-items: center; justify-content: space-between; }
+h1 { font-size: 15px; margin: 0; }
+h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 14px 0 6px; }
+section, details { border-top: 1px solid var(--line); margin-top: 10px; }
+details { padding-top: 8px; }
+summary { cursor: pointer; font-weight: 600; }
+.row { display: flex; gap: 6px; margin: 6px 0; flex-wrap: wrap; }
+button, .button {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--accent); border-radius: 6px; background: var(--accent); color: #fff;
+  font: inherit; font-weight: 600; cursor: pointer; text-align: center;
+}
+button.ghost, .button.ghost { background: var(--btn); color: var(--fg); border-color: var(--line); }
+button.danger { background: transparent; color: var(--bad); border-color: var(--bad); }
+button:disabled { opacity: .5; cursor: default; }
+label { display: block; margin: 8px 0; }
+label input[type=url], label input[type=password], label input[type=number], label input[type=text], label select {
+  display: block; width: 100%; margin-top: 3px; padding: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--btn); color: var(--fg); font: inherit;
+}
+label.check { display: flex; gap: 6px; align-items: center; }
+.muted { color: var(--muted); font-size: 12px; margin: 4px 0; min-height: 1em; }
+.pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--btn); color: var(--muted); }
+.pill.ok { background: #dcfce7; color: var(--ok); }
+.pill.bad { background: #fee2e2; color: var(--bad); }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding-top: 10px; }
+.stat { background: var(--btn); border-radius: 6px; padding: 6px 8px; }
+.stat b { display: block; font-size: 17px; }
+.stat span { font-size: 11px; color: var(--muted); }
+.hidden { display: none; }
+.row label.button { margin: 0; display: flex; align-items: center; justify-content: center; }
+.bad-text { color: var(--bad); }

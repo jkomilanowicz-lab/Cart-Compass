@@ -1,0 +1,16 @@
+{
+  "name": "cart-compass",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Keeps a private record of every AliExpress order, warns before you buy something twice, and syncs to Google Sheets.",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build": "node tools/build.mjs",
+    "e2e": "NODE_PATH=$(npm root -g) node test/e2e/extension.e2e.mjs",
+    "package": "cd extension && zip -qr ../cart-compass.zip . -x \"*.DS_Store\""
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.0"
+  },
+  "license": "MIT"
+}

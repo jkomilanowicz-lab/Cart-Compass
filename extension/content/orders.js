@@ -1,0 +1,206 @@
+/* Order list page (/p/order/index.html): passive capture + full sync on request. */
+(function () {
+  'use strict';
+  if (window.__aexOrdersLoaded) return;
+  window.__aexOrdersLoaded = true;
+
+  // After the extension is updated or reloaded, scripts already running in open tabs can no longer
+  // reach it ("Extension context invalidated"). Detect that and go quiet instead of throwing.
+  const alive = () => { try { return !!(chrome.runtime && chrome.runtime.id); } catch (_) { return false; } };
+  const send = (msg) => new Promise((resolve) => {
+    if (!alive()) return resolve({ ok: false, error: 'The extension was updated: reload this page.' });
+    try {
+      chrome.runtime.sendMessage(msg, (r) => resolve(r || { ok: false, error: chrome.runtime.lastError && chrome.runtime.lastError.message }));
+    } catch (e) {
+      resolve({ ok: false, error: String((e && e.message) || e) });
+    }
+  });
+  // Fire-and-forget progress messages (nobody may be listening).
+  const notify = (msg) => { if (!alive()) return; try { chrome.runtime.sendMessage(msg).catch(() => {}); } catch (_) { /* reloaded */ } };
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  let syncing = false;
+  let lastSavedCount = 0;
+
+  async function captureVisible() {
+    const { orders, errors } = AEX.parseOrderList(document);
+    if (errors.length) console.warn('[AEX] parse errors', errors);
+    if (!orders.length) return { orders: 0 };
+    const r = await send({ type: 'saveOrders', orders, origin: 'web-list' });
+    lastSavedCount = orders.length;
+    return { orders: orders.length, counts: r.ok ? r.result : null, error: r.error };
+  }
+
+  async function waitForMore(prevCount, timeoutMs = 20000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      await sleep(500);
+      if (AEX.findOrderCards(document).length > prevCount) {
+        await sleep(800); // let the batch finish rendering
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Click "View orders" until everything is loaded.
+   * quick=true stops once a whole loaded batch was already known and finished
+   * (completed/closed) — good for routine "what's new" syncs.
+   */
+  async function fullSync({ quick = false } = {}) {
+    if (syncing) return { error: 'Sync already running' };
+    syncing = true;
+    showToast('Syncing orders…');
+    let totalCreated = 0, totalUpdated = 0, rounds = 0;
+    try {
+      // Wait for the first batch to render.
+      for (let i = 0; i < 40 && !AEX.findOrderCards(document).length; i++) await sleep(500);
+      while (true) {
+        rounds++;
+        const r = await captureVisible();
+        if (r.counts) { totalCreated += r.counts.created; totalUpdated += r.counts.updated; }
+        showToast(`Syncing… ${r.orders} orders loaded (${totalCreated} new, ${totalUpdated} updated)`);
+        notify({ type: 'syncProgress', loaded: r.orders, created: totalCreated, updated: totalUpdated });
+        if (quick && rounds > 1 && r.counts && r.counts.created === 0 && r.counts.updated === 0) break;
+        const btn = AEX.findLoadMoreButton(document);
+        if (!btn || btn.disabled) break;
+        const before = AEX.findOrderCards(document).length;
+        btn.scrollIntoView({ block: 'center' });
+        btn.click();
+        if (!(await waitForMore(before))) break;
+        await sleep(600 + Math.random() * 600); // be gentle
+      }
+      if (!quick) await send({ type: 'markFullSync' });
+      showToast(`Done: ${lastSavedCount} orders on page, ${totalCreated} new, ${totalUpdated} updated.`, 6000);
+      return { loaded: lastSavedCount, created: totalCreated, updated: totalUpdated };
+    } finally {
+      syncing = false;
+    }
+  }
+
+  // ---------- clean-up: delete finished, already-recorded orders from the online list ----------
+
+  const cardOrderId = (card) => { try { const o = AEX.parseOrderCard(card); return o && o.orderId; } catch (_) { return null; } };
+  const hover = (el) => ['mouseover', 'mouseenter', 'mousemove'].forEach((t) => el.dispatchEvent(new MouseEvent(t, { bubbles: true })));
+
+  async function findDeleteFor(card) {
+    let ctrl = AEX.findDeleteControl(card);
+    if (ctrl) return ctrl;
+    hover(card);
+    await sleep(300);
+    if ((ctrl = AEX.findDeleteControl(card))) return ctrl;
+    // Some layouts tuck "Delete" into a "More" menu that opens outside the card.
+    const more = Array.from(card.querySelectorAll('button, a, span, [role="button"]'))
+      .find((el) => /^(more|more actions|\.\.\.|…)$/i.test(AEX.cleanText(el.textContent)) || /\bmore\b/i.test(el.getAttribute('aria-label') || ''));
+    if (more) {
+      more.click();
+      await sleep(600);
+      const cards = new Set(AEX.findOrderCards(document));
+      const item = Array.from(document.querySelectorAll('li, button, a, span, div, [role="menuitem"]'))
+        .find((el) => el.children.length === 0 && /^(delete|delete order|remove)$/i.test(AEX.cleanText(el.textContent)) &&
+          ![...cards].some((c) => c !== card && c.contains(el)));
+      if (item) return item;
+    }
+    return AEX.findDeleteControl(card, { allowHidden: true });
+  }
+
+  async function deleteCard(card, orderId) {
+    const ctrl = await findDeleteFor(card);
+    if (!ctrl) return { ok: false, error: 'no delete button found on this order' };
+    ctrl.scrollIntoView({ block: 'center' });
+    await sleep(300);
+    ctrl.click();
+    const stillListed = () => card.isConnected && cardOrderId(card) === orderId && getComputedStyle(card).display !== 'none';
+    let confirmed = false;
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      if (!stillListed()) return { ok: true };
+      const btn = !confirmed && AEX.findConfirmButton(document);
+      if (btn) { btn.click(); confirmed = true; }
+    }
+    return { ok: false, error: confirmed ? 'order still listed after confirming' : 'no confirmation dialog appeared' };
+  }
+
+  /** Delete the given orders from the AliExpress list, loading more orders as needed to find them. */
+  async function cleanupOrders({ orderIds = [], maxConsecutiveFailures = 3 } = {}) {
+    if (syncing) return { error: 'A sync is already running on this tab' };
+    syncing = true;
+    const pending = new Set(orderIds.map(String));
+    const removed = [], failed = [];
+    let streak = 0, stopped = null;
+    const progress = () => {
+      showToast(`Cleaning up… removed ${removed.length} of ${orderIds.length}${failed.length ? ` · ${failed.length} failed` : ''}`);
+      notify({ type: 'cleanupProgress', removed: removed.length, failed: failed.length, total: orderIds.length });
+    };
+    try {
+      for (let i = 0; i < 40 && !AEX.findOrderCards(document).length; i++) await sleep(500);
+      progress();
+      outer: while (pending.size) {
+        const targets = AEX.findOrderCards(document).map((c) => [c, cardOrderId(c)]).filter(([, id]) => id && pending.has(id));
+        if (!targets.length) {
+          const btn = AEX.findLoadMoreButton(document);
+          if (!btn || btn.disabled) break;
+          const before = AEX.findOrderCards(document).length;
+          btn.scrollIntoView({ block: 'center' });
+          btn.click();
+          if (!(await waitForMore(before))) break;
+          continue;
+        }
+        for (const [card, id] of targets) {
+          pending.delete(id);
+          const r = await deleteCard(card, id);
+          if (r.ok) {
+            removed.push(id);
+            streak = 0;
+            await send({ type: 'markRemovedOnline', orderIds: [id] });
+          } else {
+            failed.push({ orderId: id, error: r.error });
+            if (++streak >= maxConsecutiveFailures) { stopped = `stopped after ${streak} failures in a row (${r.error})`; break outer; }
+          }
+          progress();
+          await sleep(1000 + Math.random() * 800); // be gentle
+        }
+      }
+      const notFound = stopped ? [] : [...pending];
+      showToast(`Clean-up done: removed ${removed.length}${failed.length ? `, ${failed.length} failed` : ''}${notFound.length ? `, ${notFound.length} not found` : ''}.`, 8000);
+      return { removed: removed.length, removedIds: removed, failed, notFound, stopped };
+    } finally {
+      syncing = false;
+    }
+  }
+
+  let toastEl;
+  function showToast(text, hideAfter) {
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.style.cssText = 'position:fixed;z-index:2147483647;right:16px;bottom:16px;max-width:360px;padding:10px 14px;border-radius:8px;background:#1f2937;color:#fff;font:13px/1.4 -apple-system,system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+      document.documentElement.appendChild(toastEl);
+    }
+    toastEl.textContent = '🧾 ' + text;
+    toastEl.style.display = 'block';
+    clearTimeout(toastEl._t);
+    if (hideAfter) toastEl._t = setTimeout(() => { toastEl.style.display = 'none'; }, hideAfter);
+  }
+
+  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === 'fullSync') { fullSync(msg).then(sendResponse); return true; }
+    if (msg.type === 'cleanupOrders') { cleanupOrders(msg).then(sendResponse); return true; }
+    if (msg.type === 'captureVisible') { captureVisible().then(sendResponse); return true; }
+    if (msg.type === 'debugSample') { sendResponse({ sample: AEX.debugSample(document) }); return false; }
+    return false;
+  });
+
+  // Passive capture: whatever the user scrolls/loads gets saved.
+  let debounce;
+  const observer = new MutationObserver(() => {
+    if (!alive()) { observer.disconnect(); return; }
+    if (syncing) return;
+    clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      if (AEX.findOrderCards(document).length !== lastSavedCount) captureVisible();
+    }, 1500);
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  setTimeout(() => { if (alive()) captureVisible(); }, 2500);
+})();
