@@ -2,6 +2,15 @@
 
 Thanks for helping. The most valuable contributions are **fixes for AliExpress page changes**, because the site's markup changes often.
 
+## Issues
+
+[Issues](../../issues) are where bugs, page changes and ideas are tracked. Pick the template that fits:
+- **A field is missing or wrong:** AliExpress changed a page, or a value is read incorrectly. Include a page sample.
+- **Bug report:** something in the extension doesn't work as expected.
+- **Feature request:** an idea or improvement.
+
+Each change that ships is listed in [CHANGELOG.md](CHANGELOG.md) and on the [Releases](../../releases) page, with the issue it fixes where there is one.
+
 ## Project layout
 
 | Path | What |
@@ -30,5 +39,6 @@ Thanks for helping. The most valuable contributions are **fixes for AliExpress p
 
 ## Pull requests
 - Keep changes focused. Include a test for parser changes.
+- Reference the issue it fixes (`Fixes #12`), and add a line to the top section of `CHANGELOG.md`. Start the line with a short **bold summary**; it's shown under *What's new* in the README.
 - Run `npm run build` if you changed `extension/lib/*` or `tools/src/*`, and commit the regenerated bundles.
 - Never commit real order exports, page samples with personal data, or API keys.

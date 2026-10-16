@@ -1,5 +1,7 @@
 # Changelog
 
+What changed in each version of Cart Compass. Each version is also published on the [Releases](../../releases) page with its store zip.
+
 ## 1.1.0 (2026-10-16)
 
 ### New
@@ -13,8 +15,8 @@
 - **Clean-up reads the orders page directly** for cancelled orders: anything marked *Refund complete* is removed, even if it was never synced (it's saved first). The status line reports how many cards were checked and which cancelled orders are still waiting on a refund.
 
 ### Fixed
-- Newer order cards that show **Ref. Number** instead of *Order ID* weren't recognised, so clean-up skipped them and could wrongly report them as missing from the online list. Those marks are cleared automatically on update.
-- "Refund complete" wasn't recognised as a finished refund.
+- **"Ref. Number" order cards are recognised.** Newer order cards that show *Ref. Number* instead of *Order ID* weren't recognised, so clean-up skipped them and could wrongly report them as missing from the online list. Those marks are cleared automatically on update.
+- **"Refund complete" counts as a finished refund.** It wasn't recognised before.
 
 ## 1.0.0: Cart Compass
 - New name and icon: **Cart Compass**, order history & re-order alerts for AliExpress.

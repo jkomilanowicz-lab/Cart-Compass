@@ -14,6 +14,23 @@ Everything runs in your own browser, signed in to your own AliExpress account. T
 
 > **Unofficial.** This project is not affiliated with, endorsed by, or connected to AliExpress or Alibaba Group. It only reads pages you can already see while signed in.
 
+## What's new
+
+<!-- whats-new:start -->
+**v1.1.0** · 2026-10-16 · [release notes](../../releases/tag/v1.1.0)
+
+- Expired orders are flagged
+- Refund tracking
+- Clean-up includes cancelled and expired orders
+- Automatic local backup
+- Clean-up is quicker to use
+- Clean-up reads the orders page directly
+- "Ref. Number" order cards are recognised
+- "Refund complete" counts as a finished refund
+
+Earlier: v1.0.0, v0.8.0, v0.7.0, … · [full changelog](CHANGELOG.md) · [all releases](../../releases)
+<!-- whats-new:end -->
+
 ---
 
 ## Features
