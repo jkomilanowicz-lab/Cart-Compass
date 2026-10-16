@@ -8,6 +8,8 @@ A free, open-source Chrome extension that keeps a **complete, local record of yo
 
 Everything runs in your own browser, signed in to your own AliExpress account. There's no server, account, or tracking.
 
+<p align="center"><a href="https://chromewebstore.google.com/detail/idfkjmeajgiodejoclmlmenkgeooiedo"><b>➜ Get Cart Compass from the Chrome Web Store</b></a></p>
+
 ![Popup](docs/screenshot-popup.png)
 
 > **Unofficial.** This project is not affiliated with, endorsed by, or connected to AliExpress or Alibaba Group. It only reads pages you can already see while signed in.
@@ -40,9 +42,9 @@ Everything runs in your own browser, signed in to your own AliExpress account. T
 ## Install
 
 ### From the Chrome Web Store
-Search for **Cart Compass** on the [Chrome Web Store](https://chromewebstore.google.com/search/Cart%20Compass) and click **Add to Chrome**. Updates install automatically.
+Open **[Cart Compass on the Chrome Web Store](https://chromewebstore.google.com/detail/idfkjmeajgiodejoclmlmenkgeooiedo)** and click **Add to Chrome**. Then pin it: click the puzzle-piece icon in the toolbar and the pin next to Cart Compass. Updates install automatically.
 
-### From a release (easiest)
+### From a release (manual install)
 1. Download `cart-compass-vX.Y.Z.zip` from the [Releases](../../releases) page and unzip it.
 2. Open `chrome://extensions` and turn on **Developer mode** (top right).
 3. Click **Load unpacked** and select the unzipped folder.
