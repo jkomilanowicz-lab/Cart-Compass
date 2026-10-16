@@ -8,7 +8,7 @@ A free, open-source Chrome extension that keeps a **complete, local record of yo
 
 Everything runs in your own browser, signed in to your own AliExpress account. There's no server, account, or tracking.
 
-<p align="center"><a href="https://chromewebstore.google.com/detail/idfkjmeajgiodejoclmlmenkgeooiedo"><b>➜ Get Cart Compass from the Chrome Web Store</b></a></p>
+<p align="center"><a href="https://chromewebstore.google.com/detail/idfkjmeajgiodejoclmlmenkgeooiedo"><b>➜ Get Cart Compass from the Chrome Web Store</b></a> · <a href="../../wiki"><b>📖 User guide (wiki)</b></a></p>
 
 ![Popup](docs/screenshot-popup.png)
 

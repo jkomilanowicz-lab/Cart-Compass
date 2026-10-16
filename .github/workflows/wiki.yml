@@ -1,0 +1,39 @@
+# Publishes the wiki/ folder to the repository's GitHub wiki whenever it changes on main.
+# The wiki/ folder is the source; edit pages there, not in the wiki's web editor.
+# The wiki must exist first: open the Wiki tab once and save any page.
+name: Wiki
+
+on:
+  push:
+    branches: [main]
+    paths: [wiki/**]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish to the wiki
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          if ! git clone -q "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki-repo; then
+            echo "::error::The wiki doesn't exist yet. Open the Wiki tab, save any first page, then re-run this workflow."
+            exit 1
+          fi
+          rsync -a --delete --exclude .git wiki/ wiki-repo/
+          cd wiki-repo
+          git config user.name "${GITHUB_ACTOR}"
+          git config user.email "${GITHUB_ACTOR_ID}+${GITHUB_ACTOR}@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki already up to date."
+          else
+            git commit -q -m "Update wiki from ${GITHUB_SHA::7}"
+            git push -q
+          fi

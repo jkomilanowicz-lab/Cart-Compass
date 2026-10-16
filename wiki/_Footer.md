@@ -1,0 +1,1 @@
+[Chrome Web Store](https://chromewebstore.google.com/detail/idfkjmeajgiodejoclmlmenkgeooiedo) · [Changelog](https://github.com/jkomilanowicz-lab/Cart-Compass/blob/main/CHANGELOG.md) · [Issues](https://github.com/jkomilanowicz-lab/Cart-Compass/issues) · Cart Compass is not affiliated with AliExpress or Alibaba Group.
