@@ -1,0 +1,60 @@
+# Publishes a GitHub release whenever the extension version changes on main.
+# It tags the commit (v<version>), builds the Chrome Web Store zip and uses the
+# matching CHANGELOG.md section as the release notes. Re-running it for a version
+# that's already released does nothing.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths: [extension/manifest.json]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: v
+        run: echo "version=$(node -p "require('./extension/manifest.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing release
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION is already released."
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the store zip
+        if: steps.check.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          mkdir -p build && cp -R extension build/ext
+          # The store package doesn't need the localhost entries used for local testing.
+          node -e "
+            const fs = require('fs'), f = 'build/ext/manifest.json', m = JSON.parse(fs.readFileSync(f, 'utf8'));
+            m.optional_host_permissions = (m.optional_host_permissions || []).filter((h) => !/localhost|127\.0\.0\.1/.test(h));
+            fs.writeFileSync(f, JSON.stringify(m, null, 2) + '\n');"
+          (cd build/ext && zip -qr "../../cart-compass-v$VERSION.zip" . -x '*.DS_Store')
+          # Release notes: this version's section of the changelog.
+          awk -v v="$VERSION" '/^## /{ if (f) exit; if (index($0, "## " v) == 1) { f = 1; next } } f' CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "See CHANGELOG.md." > notes.md
+
+      - name: Create the release
+        if: steps.check.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          gh release create "v$VERSION" "cart-compass-v$VERSION.zip" \
+            --target "$GITHUB_SHA" --title "Cart Compass v$VERSION" --notes-file notes.md --latest
