@@ -24,7 +24,7 @@
   // Ordered: first match wins.
   const STATUS_RULES = [
     [/await(ing)?\s+payment|pending payment|unpaid/i, 'awaiting_payment'],
-    [/cancel|closed|refund(ed)?\b/i, 'closed'],
+    [/cancel|closed|expired|late shipment|refund(ed)?\b/i, 'closed'],
     [/dispute|return/i, 'dispute'],
     [/to ship|awaiting shipment|processing|confirmed|not shipped|ready/i, 'processing'],
     [/shipped|in transit|awaiting delivery|collected by (the )?carrier|out for delivery|awaiting receipt|to receive|on the way/i, 'shipped'],
@@ -36,6 +36,23 @@
     for (const [re, status] of STATUS_RULES) if (re.test(text)) return status;
     return 'unknown';
   }
+
+  // Why a closed order was closed. "expired" = the seller didn't ship in time, so nothing arrived:
+  // a refund is due and the item may need re-ordering. AliExpress words it "has not shipped in the
+  // required time" / "Order canceled due to late shipment".
+  // Specific wording, safe to look for anywhere on a page.
+  const EXPIRED_TEXT_RE = /not (?:been )?shipped (?:in|within) (?:the )?(?:required|promised|specified) time|late shipment|(?:didn'?t|did not|failed to) ship (?:on|in) time|shipping (?:time ?out|timeout|overdue|deadline (?:passed|expired))/i;
+  // Also a bare "Expired" status label (only checked against short status text).
+  const EXPIRED_RE = new RegExp(`${EXPIRED_TEXT_RE.source}|\\bexpired\\b`, 'i');
+  const UNPAID_RE = /payment (?:not (?:received|completed)|time ?out|timeout|expired)|not paid|unpaid|awaiting payment/i;
+  const REFUNDED_RE = /refund(?:ed)?\s*(?:successful(?:ly)?|complete(?:d)?|processed|confirmed|credited)|has been refunded|been credited to your (?:original )?payment method|refund issued/i;
+  function closeReasonOf(text) {
+    if (!text) return null;
+    if (EXPIRED_RE.test(text)) return 'expired';
+    if (UNPAID_RE.test(text)) return 'unpaid';
+    return null;
+  }
+  const CLOSE_REASON_RANK = { cancelled: 1, unpaid: 2, expired: 3 };
 
   // Status precedence for merges: never move "backwards" because an older
   // source (e.g. an old confirmation email) is merged after a newer one.
@@ -189,9 +206,43 @@
       sources: Array.from(new Set([...(raw.sources || []), ...(source ? [source] : [])])),
       orderUrl: `https://www.aliexpress.com/p/order/detail.html?orderId=${orderId}`,
       detailFetchedAt: raw.detailFetchedAt || null,
+      ...closeInfo(raw, statusText, now),
       firstSeenAt: raw.firstSeenAt || now,
       updatedAt: raw.updatedAt || now,
     });
+  }
+
+  // closeReason / closedAt / refundedAt for closed orders (all null otherwise).
+  function closeInfo(raw, statusText, now) {
+    const status = raw.status || normalizeStatus(statusText);
+    if (status !== 'closed') return {};
+    const reasonText = cleanText(raw.closeReasonText) || null;
+    const reason = raw.closeReason || closeReasonOf(`${statusText || ''} ${reasonText || ''}`) || 'cancelled';
+    let closedAt = raw.closedAt || null;
+    let estimated = !!raw.closedAtEstimated;
+    if (!closedAt) {
+      // First seen already closed: the real closing date is unknown. Old orders are assumed closed
+      // ~30 days after ordering; recent ones count from now (refund waits only ever err long).
+      const est = raw.orderDate ? new Date(Date.parse(raw.orderDate) + 30 * 86400000) : null;
+      closedAt = est && est < new Date(now) ? est.toISOString() : now;
+      estimated = true;
+    }
+    return { closeReason: reason, closeReasonText: reasonText, closedAt, closedAtEstimated: estimated, refundedAt: raw.refundedAt || null,
+      refundAmount: Number.isFinite(raw.refundAmount) ? raw.refundAmount : null };
+  }
+
+  const isExpired = (o) => o.status === 'closed' && o.closeReason === 'expired';
+  /** When the refund for a closed order is expected to have cleared (ISO date), or null if none is due. */
+  function refundDueAt(o, waitDays) {
+    if (o.status !== 'closed' || o.closeReason === 'unpaid') return null;
+    if (o.refundedAt) return o.refundedAt;
+    return new Date(Date.parse(o.closedAt || o.firstSeenAt || Date.now()) + waitDays * 86400000).toISOString();
+  }
+  /** True once nothing is still owed on a closed order: unpaid, refund seen, or the wait period passed. */
+  function refundCleared(o, waitDays, now = Date.now()) {
+    if (o.status !== 'closed') return false;
+    if (o.closeReason === 'unpaid' || o.refundedAt) return true;
+    return Date.parse(refundDueAt(o, waitDays)) <= now;
   }
 
   // Source quality for item data: detail page > list page > email (truncated titles).
@@ -245,12 +296,40 @@
     for (const t of incoming.tracking || []) if (!tracking.some((x) => x.number === t.number)) tracking.push(t);
     out.tracking = tracking;
     out.sources = Array.from(new Set([...(existing.sources || []), ...(incoming.sources || [])]));
+    mergeCloseInfo(out, existing, incoming);
     sanitizeOrder(out);
     out.firstSeenAt = existing.firstSeenAt || incoming.firstSeenAt;
     out.updatedAt = stripVolatile(out) === stripVolatile(existing)
       ? existing.updatedAt
       : new Date().toISOString();
     return out;
+  }
+
+  function mergeCloseInfo(out, existing, incoming) {
+    if (out.status !== 'closed') {
+      for (const k of ['closeReason', 'closeReasonText', 'closedAt', 'closedAtEstimated', 'refundedAt', 'refundAmount']) delete out[k];
+      return;
+    }
+    const wasClosed = existing.status === 'closed';
+    // Closing date: kept once known; an order that just turned closed is dated now.
+    if (wasClosed && existing.closedAt) {
+      out.closedAt = existing.closedAt;
+      out.closedAtEstimated = !!existing.closedAtEstimated;
+      // A real observation replaces an estimate when it's earlier.
+      if (existing.closedAtEstimated && incoming.closedAt && !incoming.closedAtEstimated) { out.closedAt = incoming.closedAt; out.closedAtEstimated = false; }
+    } else if (!wasClosed) {
+      out.closedAt = new Date().toISOString();
+      out.closedAtEstimated = false;
+    } else {
+      out.closedAt = incoming.closedAt || new Date().toISOString();
+      out.closedAtEstimated = !!incoming.closedAtEstimated;
+    }
+    const reasons = [existing.closeReason, incoming.closeReason].filter(Boolean);
+    out.closeReason = reasons.sort((a, b) => (CLOSE_REASON_RANK[b] || 0) - (CLOSE_REASON_RANK[a] || 0))[0] || 'cancelled';
+    out.closeReasonText = incoming.closeReasonText || existing.closeReasonText || null;
+    const refunds = [existing.refundedAt, incoming.refundedAt].filter(Boolean).sort();
+    out.refundedAt = refunds[0] || null;
+    out.refundAmount = incoming.refundAmount != null ? incoming.refundAmount : (existing.refundAmount != null ? existing.refundAmount : null);
   }
 
   // Key-order independent JSON (storage round-trips may reorder keys).
@@ -475,7 +554,7 @@
   const api = {
     SCHEMA_VERSION, cleanText, parseMoney, parseQuantity, parseDate, normalizeStatus,
     productIdFromUrl, orderIdFromUrl, hash, makeLineId, normalizeItem, normalizeOrder,
-    mergeOrder, mergeInto, buildPayload, isCancelled, outgoingOrders, sanitizeOrder, withCostBreakdown, toCSV, similarity, sharedModelCodes, purchaseHistory, STATUS_RANK,
+    mergeOrder, mergeInto, buildPayload, isCancelled, isExpired, closeReasonOf, refundDueAt, refundCleared, EXPIRED_RE, EXPIRED_TEXT_RE, REFUNDED_RE, outgoingOrders, sanitizeOrder, withCostBreakdown, toCSV, similarity, sharedModelCodes, purchaseHistory, STATUS_RANK,
   };
   root.AEX = Object.assign(root.AEX || {}, api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;

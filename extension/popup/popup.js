@@ -24,6 +24,7 @@ async function refresh() {
     <div class="stat"><b>${s.orderCount}</b><span>orders</span></div>
     <div class="stat"><b>${s.lineCount}</b><span>line items</span></div>
     <div class="stat"><b>${open}</b><span>open / in transit</span></div>`;
+  renderExpired().catch(() => {});
   $('syncInfo').textContent = `Last saved ${fmtTime(s.lastSavedAt)} · last full sync ${fmtTime(s.lastFullSync)} · ${s.needsDetail} still need details · ${s.cancelled || 0} cancelled${s.settings.ignoreCancelled ? ' (ignored)' : ''}${s.removedOnline ? ` · ${s.removedOnline} removed from the AliExpress list (kept here)` : ''}`;
   if (!$('sheetStatus').dataset.busy) {
     const r = s.lastSheetResult;
@@ -79,6 +80,42 @@ async function runSync(quick) {
     refresh();
   }
 }
+
+// ---- expired orders (never shipped) ----
+let expiredJson = '';
+const shortDate = (iso) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '?');
+function refundLine(e) {
+  if (e.refundedAt) return `refunded${e.refundAmount != null ? ` ${e.currency === 'USD' || !e.currency ? '$' : ''}${e.refundAmount.toFixed(2)}${e.currency && e.currency !== 'USD' ? ' ' + e.currency : ''}` : ''} ${shortDate(e.refundedAt)}`;
+  if (e.refundCleared) return `refund should have arrived by ${shortDate(e.refundDueAt)}: check if it hasn't`;
+  return `refund expected by ${shortDate(e.refundDueAt)}`;
+}
+async function renderExpired() {
+  const list = await bg('expiredOrders');
+  const json = JSON.stringify(list);
+  if (json === expiredJson) return;
+  expiredJson = json;
+  $('expiredBox').classList.toggle('hidden', !list.length);
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  $('expiredList').innerHTML = list.slice(0, 8).map((e) => {
+    const it = e.items[0] || {};
+    const more = e.items.length > 1 ? ` +${e.items.length - 1} more` : '';
+    return `<li>
+      <div class="exp-title">${esc(it.title || 'Order ' + e.orderId)}${it.quantity ? ` <b>×${esc(it.quantity)}</b>` : ''}${esc(more)}</div>
+      <div class="muted">Ordered ${esc(e.orderDate || '?')}${e.storeName ? ` · ${esc(e.storeName)}` : ''} · ${esc(refundLine(e))}</div>
+      <div class="row">
+        ${it.productUrl ? `<button class="ghost" data-reorder="${esc(it.productUrl)}">Re-order</button>` : ''}
+        <button class="ghost" data-order="${esc(e.orderId)}">View order</button>
+        <button class="ghost" data-done="${esc(e.orderId)}" title="Hide this one (re-ordered or not needed)">Done</button>
+      </div></li>`;
+  }).join('') + (list.length > 8 ? `<li class="muted">…and ${list.length - 8} more</li>` : '');
+}
+$('expiredList').addEventListener('click', async (ev) => {
+  const b = ev.target.closest('button');
+  if (!b) return;
+  if (b.dataset.reorder) chrome.tabs.create({ url: b.dataset.reorder });
+  if (b.dataset.order) chrome.tabs.create({ url: `https://www.aliexpress.com/p/order/detail.html?orderId=${b.dataset.order}` });
+  if (b.dataset.done) { await bg('dismissExpired', { orderIds: [b.dataset.done] }); expiredJson = ''; renderExpired(); }
+});
 
 function download(name, text, type) {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -137,90 +174,121 @@ $('btnOpenSheet').onclick = async () => {
 };
 
 // ---- clean up the online AliExpress order list ----
+// The plan and status live in the worker, so closing the popup (or a dialog stealing focus)
+// doesn't reset anything. The one-order test is asked for once, ever.
 let cleanPlan = null;
-let backedUp = false;
-const SKIP_LABEL = { notFinished: 'not completed yet', noDetails: 'details not fetched', tooRecent: 'too recent', notInSheet: 'not in the sheet', sheetDiffers: 'sheet differs from local' };
+let cleanTested = false;
+const SKIP_LABEL = { notFinished: 'not completed yet', noDetails: 'details not fetched', tooRecent: 'too recent', notInSheet: 'not in the sheet', sheetDiffers: 'sheet differs from local', refundPending: 'cancelled, waiting for the refund' };
+
+function setCleanStatus(text) {
+  $('cleanStatus').textContent = text;
+  chrome.storage.local.set({ cleanupStatus: { at: Date.now(), text } });
+}
+
+const checkCount = () => (cleanPlan && cleanPlan.checkIds ? cleanPlan.checkIds.length : 0);
 
 function showCleanButtons() {
   const n = cleanPlan ? cleanPlan.orderIds.length : 0;
-  $('btnCleanOne').classList.toggle('hidden', !n || cleanPlan.tested);
-  $('btnCleanAll').classList.toggle('hidden', !n || !cleanPlan.tested);
-  $('btnCleanAll').textContent = `Remove ${n === 1 ? 'the last one' : `remaining ${n}`}`;
+  const any = n + checkCount() || (cleanPlan && cleanPlan.sweepCancelled);
+  $('btnCleanOne').classList.toggle('hidden', !any || cleanTested);
+  $('btnCleanAll').classList.toggle('hidden', !any || !cleanTested);
+  $('btnCleanAll').textContent = n ? `Remove ${n === 1 ? '1 order' : `${n} orders`}` : 'Remove refunded cancelled orders';
 }
 
+function planText(p) {
+  const skipped = Object.entries(p.skipped).filter(([, n]) => n).map(([k, n]) => `${n} ${SKIP_LABEL[k] || k}`).join(', ');
+  return p.orderIds.length
+    ? `${p.orderIds.length} order${p.orderIds.length === 1 ? '' : 's'} can be removed (${p.completed} completed, older than ${p.minAgeDays} days${p.cancelled ? `; ${p.cancelled} cancelled${p.expired ? `, ${p.expired} of them expired` : ''}, refund cleared` : ''}).${skipped ? ` Kept: ${skipped}.` : ''}${cleanTested ? '' : ' Try one first.'}`
+    : p.checkIds && p.checkIds.length
+      ? `${p.checkIds.length} cancelled order${p.checkIds.length === 1 ? '' : 's'} may still be waiting for a refund. Clean-up checks the whole orders page and removes every cancelled order that says "Refund complete".${skipped ? ` Kept: ${skipped}.` : ''}`
+      : `Nothing saved is due for removal.${skipped ? ` Kept: ${skipped}.` : ''}${p.sweepCancelled ? ' Clean-up can still check the orders page for cancelled orders whose refund is complete.' : ''}`;
+}
+
+(async () => {
+  try {
+    const st = await bg('cleanupState');
+    cleanTested = st.tested;
+    cleanPlan = st.plan;
+    const { cleanupStatus } = await chrome.storage.local.get('cleanupStatus');
+    if (cleanPlan && cleanupStatus && Date.now() - cleanupStatus.at < 3600000) $('cleanStatus').textContent = cleanupStatus.text;
+  } catch (e) { /* worker restarting; the buttons just start fresh */ }
+  showCleanButtons();
+})();
+
 $('btnCleanPlan').onclick = async () => {
-  const el = $('cleanStatus');
   cleanPlan = null;
   showCleanButtons();
   try {
-    el.textContent = 'Updating the Google Sheet first…';
+    setCleanStatus('Updating the Google Sheet first…');
     await bg('syncSheet');
-    el.textContent = 'Checking which orders the sheet has…';
-    const p = await bg('cleanupPlan');
-    cleanPlan = { ...p, tested: false };
-    const skipped = Object.entries(p.skipped).filter(([, n]) => n).map(([k, n]) => `${n} ${SKIP_LABEL[k] || k}`).join(', ');
-    el.textContent = p.orderIds.length
-      ? `${p.orderIds.length} order${p.orderIds.length === 1 ? '' : 's'} older than ${p.minAgeDays} days can be removed (${p.completed} completed${p.cancelled ? `, ${p.cancelled} cancelled` : ''}).${skipped ? ` Kept: ${skipped}.` : ''} Try one first.`
-      : `Nothing to remove right now.${skipped ? ` Kept: ${skipped}.` : ''}`;
+    setCleanStatus('Checking which orders the sheet has…');
+    cleanPlan = await bg('cleanupPlan');
+    setCleanStatus(planText(cleanPlan));
   } catch (e) {
-    el.textContent = 'Clean-up check failed: ' + e.message;
+    setCleanStatus('Clean-up check failed: ' + e.message);
   }
   showCleanButtons();
 };
 
-async function runCleanup(orderIds) {
-  const el = $('cleanStatus');
-  if (!backedUp) {
-    // A backup file first: AliExpress can't undo a delete.
-    const orders = await bg('getOrders');
-    download(`aliexpress-orders-backup-${stamp()}.json`, JSON.stringify(AEX.buildPayload(orders, 'aliexpress-order-sync-extension'), null, 2), 'application/json');
-    backedUp = true;
-  }
-  el.textContent = 'Opening orders page…';
+async function runCleanup(orderIds, { limit } = {}) {
+  const checkIds = (cleanPlan.checkIds || []).slice();
+  // Every order is already in the Google Sheet (or cancelled with nothing owed), and the
+  // worker keeps a local copy of everything; no backup file needed.
+  await bg('snapshotOrders');
+  setCleanStatus('Opening orders page…');
   const tab = await findOrCreateOrdersTab();
-  el.textContent = 'Removing — keep the AliExpress tab open (you can close this popup).';
-  const r = await sendToTab(tab.id, { type: 'cleanupOrders', orderIds });
+  setCleanStatus('Removing — keep the AliExpress tab open (you can close this popup).');
+  const r = await sendToTab(tab.id, { type: 'cleanupOrders', orderIds, checkIds, sweepCancelled: !!cleanPlan.sweepCancelled, limit });
   if (!r || r.error) throw new Error((r && r.error) || 'no reply from the orders page');
-  const done = new Set(r.removedIds);
-  cleanPlan.orderIds = cleanPlan.orderIds.filter((id) => !done.has(id) && !r.failed.some((f) => f.orderId === id) && !r.notFound.includes(id));
+  const notListed = r.notListed || r.notFound || [];
+  const done = new Set([...r.removedIds, ...notListed, ...r.failed.map((f) => f.orderId)]);
+  cleanPlan.orderIds = cleanPlan.orderIds.filter((id) => !done.has(id));
+  // Checked once per run: what wasn't removed is still waiting for its refund.
+  if (limit == null) cleanPlan.checkIds = [];
+  else cleanPlan.checkIds = cleanPlan.checkIds.filter((id) => !done.has(id));
   const fail = r.failed.length ? ` · ${r.failed.length} failed (${r.failed[0].error})` : '';
-  el.textContent = `Removed ${r.removed} from the AliExpress list${fail}${r.notFound.length ? ` · ${r.notFound.length} not found online` : ''}${r.stopped ? ` · ${r.stopped}` : ''}.`;
+  const gone = notListed.length ? ` · ${notListed.length} weren't in your online list any more (skipped from now on)` : '';
+  const unread = r.unreadable && r.missing ? ` · couldn't read the order number on ${r.unreadable} order card${r.unreadable === 1 ? '' : 's'}: use Troubleshooting → Copy page sample and report it` : '';
+  const wait = r.waiting && r.waiting.length ? ` · ${r.waiting.length} cancelled order${r.waiting.length === 1 ? '' : 's'} on the page ${r.waiting.length === 1 ? "doesn't" : "don't"} show "Refund complete" yet (${r.waiting.slice(0, 3).join(', ')}${r.waiting.length > 3 ? ', …' : ''})` : '';
+  const scanned = r.scanned != null && limit == null ? ` Checked ${r.scanned} order card${r.scanned === 1 ? '' : 's'}.` : '';
+  setCleanStatus(`Removed ${r.removed} from the AliExpress list${fail}${gone}${wait}${unread}${r.stopped ? ` · ${r.stopped}` : ''}.${scanned}`);
   return r;
 }
 
 $('btnCleanOne').onclick = async () => {
-  if (!cleanPlan || !cleanPlan.orderIds.length) return;
-  if (!confirm('Delete the oldest eligible order from your AliExpress order list as a test?\n\nAliExpress cannot undo this. The order stays saved in this extension and your Google Sheet, and a backup JSON is downloaded first.')) return;
+  if (!cleanPlan) return;
   try {
-    const r = await runCleanup(cleanPlan.orderIds.slice(0, 1));
+    const r = await runCleanup(cleanPlan.orderIds.slice(), { limit: 1 });
+    const el = $('cleanStatus');
     if (r.removed) {
-      cleanPlan.tested = true;
-      $('cleanStatus').textContent += ` Check the AliExpress tab, then remove the rest.`;
-    } else {
-      $('cleanStatus').textContent += ' Open the orders page, use Troubleshooting → Copy page sample, and report it.';
+      cleanTested = true;
+      await bg('markCleanupTested');
+      setCleanStatus(el.textContent + (cleanPlan.orderIds.length + checkCount() ? ' Check the AliExpress tab, then remove the rest.' : ''));
+    } else if (r.failed.length) {
+      setCleanStatus(el.textContent + ' Open the orders page, use Troubleshooting → Copy page sample, and report it.');
+    } else if (!cleanPlan.orderIds.length && !checkCount()) {
+      setCleanStatus(el.textContent + ' Nothing left to remove.');
     }
   } catch (e) {
-    $('cleanStatus').textContent = 'Clean-up failed: ' + e.message;
+    setCleanStatus('Clean-up failed: ' + e.message);
   }
   showCleanButtons();
   refresh();
 };
 
 $('btnCleanAll').onclick = async () => {
-  if (!cleanPlan || !cleanPlan.orderIds.length) return;
-  const n = cleanPlan.orderIds.length;
-  if (!confirm(`Delete ${n} order${n === 1 ? '' : 's'} from your AliExpress order list?\n\nAliExpress cannot undo this. They stay saved in this extension and your Google Sheet.`)) return;
+  if (!cleanPlan) return;
   try {
     await runCleanup(cleanPlan.orderIds.slice());
   } catch (e) {
-    $('cleanStatus').textContent = 'Clean-up failed: ' + e.message;
+    setCleanStatus('Clean-up failed: ' + e.message);
   }
   showCleanButtons();
   refresh();
 };
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === 'cleanupProgress') $('cleanStatus').textContent = `Removing… ${msg.removed} of ${msg.total}${msg.failed ? ` · ${msg.failed} failed` : ''}`;
+  if (msg && msg.type === 'cleanupProgress') setCleanStatus(`Removing… ${msg.removed} of ${msg.total}${msg.failed ? ` · ${msg.failed} failed` : ''}`);
 });
 
 $('btnSettings').onclick = () => chrome.runtime.openOptionsPage();
@@ -237,10 +305,24 @@ $('btnSample').onclick = async () => {
 };
 
 $('btnClear').onclick = async () => {
-  if (!confirm('Delete all locally saved orders? (Exported files and your Google Sheet are not affected.)\n\nOrders you removed from the AliExpress list can only come back by importing a JSON backup.')) return;
+  if (!confirm('Delete all locally saved orders? (Exported files and your Google Sheet are not affected.)\n\nAn automatic backup is kept: "Restore automatic backup" brings them back.')) return;
   await bg('clearAll');
+  showBackup();
   refresh();
 };
+
+async function showBackup() {
+  const b = await bg('autoBackupInfo').catch(() => null);
+  $('btnRestore').classList.toggle('hidden', !b);
+  if (b) $('btnRestore').textContent = `Restore automatic backup (${b.count} orders, ${shortDate(b.at)})`;
+}
+$('btnRestore').onclick = async () => {
+  if (!confirm('Merge the automatic backup back into your saved orders? Nothing already saved is lost.')) return;
+  const r = await bg('restoreAutoBackup');
+  $('btnRestore').textContent = `Restored (${r.created} new, ${r.updated} updated)`;
+  refresh();
+};
+showBackup();
 
 refresh();
 setInterval(refresh, 1500);

@@ -11,7 +11,8 @@ const DEFAULT_SETTINGS = {
   autoSheetSync: false,     // push to the sheet after every save
   similarityThreshold: 0.6, // fuzzy title match for "similar items you ordered"
   cleanupMinAgeDays: 30,    // clean-up only removes orders at least this old from the AliExpress list
-  cleanupCancelled: false,  // clean-up also removes cancelled/closed orders
+  cleanupCancelled: true,   // clean-up also removes cancelled/expired orders (once their refund has cleared)
+  refundWaitDays: 14,       // days after an order closes before its refund is assumed to have cleared
 };
 
 // ---------------- storage ----------------
@@ -79,11 +80,21 @@ async function deepSync({ orderIds, force = false } = {}) {
   const settings = await getSettings();
   const map = await getOrdersMap();
   const removedOnline = await getRemovedOnline();
+  const stale = (iso, days) => !iso || Date.now() - Date.parse(iso) > days * 86400000;
+  const wanted = (o) => {
+    if (removedOnline[o.orderId]) return false; // deleted from the AliExpress list: details are final
+    if (AEX.isCancelled(o)) {
+      if (force) return !settings.ignoreCancelled || !o.detailFetchedAt;
+      // Read each closed order once to learn why it closed (expired = never shipped), then every
+      // few days until its refund shows up or the refund wait has passed.
+      if (!o.detailFetchedAt) return true;
+      return o.closeReason !== 'unpaid' && !o.refundedAt && !AEX.refundCleared(o, settings.refundWaitDays) && stale(o.detailFetchedAt, 3);
+    }
+    return force || !o.detailFetchedAt || ['processing', 'shipped', 'awaiting_payment', 'unknown'].includes(o.status) ||
+      (o.items || []).some((it) => it.titleTruncated || !it.productId);
+  };
   let targets = orderIds || Object.values(map)
-    .filter((o) => !(settings.ignoreCancelled && AEX.isCancelled(o)))
-    .filter((o) => !removedOnline[o.orderId]) // deleted from the AliExpress list: details are final
-    .filter((o) => force || !o.detailFetchedAt || ['processing', 'shipped', 'awaiting_payment', 'unknown'].includes(o.status) ||
-      (o.items || []).some((it) => it.titleTruncated || !it.productId))
+    .filter(wanted)
     // Re-fetch: least recently fetched first, so repeated clicks walk through every order.
     .sort(force
       ? (a, b) => String(a.detailFetchedAt || '').localeCompare(String(b.detailFetchedAt || ''))
@@ -153,13 +164,20 @@ async function cleanupPlan() {
   const settings = await getSettings();
   const orders = Object.values(await getOrdersMap());
   const removed = await getRemovedOnline();
+  const { notListedOnline = {} } = await chrome.storage.local.get('notListedOnline');
   const cutoff = new Date(Date.now() - settings.cleanupMinAgeDays * 86400000).toISOString().slice(0, 10);
-  const skipped = { notFinished: 0, noDetails: 0, tooRecent: 0, notInSheet: 0, sheetDiffers: 0 };
-  const candidates = [], cancelled = [];
+  const skipped = { notFinished: 0, noDetails: 0, tooRecent: 0, notInSheet: 0, sheetDiffers: 0, refundPending: 0 };
+  const candidates = [], cancelled = [], refundPendingIds = [];
   for (const o of orders) {
-    if (removed[o.orderId]) continue;
+    if (removed[o.orderId] || notListedOnline[o.orderId]) continue;
+    // Cancelled/expired orders aren't in the sheet; they go once nothing is still owed on them.
+    if (AEX.isCancelled(o)) {
+      if (!settings.cleanupCancelled) continue;
+      if (!AEX.refundCleared(o, settings.refundWaitDays)) { skipped.refundPending++; refundPendingIds.push(o.orderId); continue; }
+      cancelled.push(o);
+      continue;
+    }
     if (!o.orderDate || o.orderDate > cutoff) { skipped.tooRecent++; continue; }
-    if (AEX.isCancelled(o)) { if (settings.cleanupCancelled) cancelled.push(o); continue; }
     if (o.status !== 'completed') { skipped.notFinished++; continue; }
     if (!o.detailFetchedAt || !(o.items || []).length) { skipped.noDetails++; continue; }
     candidates.push(o);
@@ -180,14 +198,71 @@ async function cleanupPlan() {
   }
   eligible.push(...cancelled);
   eligible.sort((a, b) => String(a.orderDate).localeCompare(String(b.orderDate))); // oldest first
-  return {
+  const plan = {
     orderIds: eligible.map((o) => o.orderId),
+    // Removed too if their card on the orders page shows the refund is complete.
+    checkIds: refundPendingIds,
+    // Also remove any cancelled order the page shows as refunded, saved or not.
+    sweepCancelled: !!settings.cleanupCancelled,
     completed: eligible.length - cancelled.length,
     cancelled: cancelled.length,
+    expired: cancelled.filter(AEX.isExpired).length,
+    refundWaitDays: settings.refundWaitDays,
     skipped,
     minAgeDays: settings.cleanupMinAgeDays,
     alreadyRemoved: Object.keys(removed).length,
+    notListed: Object.keys(notListedOnline).length,
   };
+  // Kept so a reopened popup picks up where it left off.
+  await chrome.storage.local.set({ cleanupCache: { at: new Date().toISOString(), plan } });
+  return plan;
+}
+
+// The last plan, minus anything removed (or found missing) since; null once it's an hour old.
+async function cleanupState() {
+  const { cleanupCache, cleanupTested, notListedOnline = {} } = await chrome.storage.local.get(['cleanupCache', 'cleanupTested', 'notListedOnline']);
+  const removed = await getRemovedOnline();
+  const fresh = cleanupCache && Date.now() - Date.parse(cleanupCache.at) < 3600000;
+  const plan = fresh ? { ...cleanupCache.plan, orderIds: cleanupCache.plan.orderIds.filter((id) => !removed[id] && !notListedOnline[id]), checkIds: (cleanupCache.plan.checkIds || []).filter((id) => !removed[id]) } : null;
+  return { plan, tested: !!cleanupTested };
+}
+
+// ---------------- automatic local backup ----------------
+// A copy of every saved order, refreshed before anything destructive (clean-up, Clear local data),
+// so no backup file is needed. Restored from Troubleshooting.
+
+async function snapshotOrders() {
+  const orders = Object.values(await getOrdersMap());
+  if (!orders.length) return null;
+  const autoBackup = { at: new Date().toISOString(), orders };
+  await chrome.storage.local.set({ autoBackup });
+  return { at: autoBackup.at, count: orders.length };
+}
+
+// ---------------- expired orders (seller didn't ship in time) ----------------
+// Flagged until the user marks them handled: nothing arrived, a refund is due, and the item may
+// need ordering again.
+
+async function getExpiredHandled() {
+  const { expiredHandled } = await chrome.storage.local.get('expiredHandled');
+  return expiredHandled || {};
+}
+
+function expiredSummary(o, settings) {
+  return {
+    orderId: o.orderId, orderDate: o.orderDate, storeName: o.storeName, total: o.total, currency: o.currency,
+    closedAt: o.closedAt, refundedAt: o.refundedAt, refundAmount: o.refundAmount,
+    refundDueAt: AEX.refundDueAt(o, settings.refundWaitDays),
+    refundCleared: AEX.refundCleared(o, settings.refundWaitDays),
+    items: (o.items || []).map((it) => ({ title: it.title, variant: it.variant, quantity: it.quantity, productId: it.productId, productUrl: it.productUrl, imageUrl: it.imageUrl })),
+  };
+}
+
+async function expiredOrders() {
+  const [settings, map, handled] = await Promise.all([getSettings(), getOrdersMap(), getExpiredHandled()]);
+  return Object.values(map).filter((o) => AEX.isExpired(o) && !handled[o.orderId])
+    .sort((a, b) => String(b.closedAt).localeCompare(String(a.closedAt)))
+    .map((o) => expiredSummary(o, settings));
 }
 
 let sheetTimer = null;
@@ -215,6 +290,7 @@ const handlers = {
       needsDetail: orders.filter((o) => !o.detailFetchedAt && !AEX.isCancelled(o)).length,
       cancelled: orders.filter(AEX.isCancelled).length,
       removedOnline: Object.keys(await getRemovedOnline()).length,
+      expired: (await expiredOrders()).length,
       deepSync: deepSyncState,
       settings: withoutSecrets(await getSettings()),
       ...s,
@@ -228,9 +304,35 @@ const handlers = {
   },
   async syncSheet() { return syncToSheet(); },
   async cleanupPlan() { return cleanupPlan(); },
+  async cleanupState() { return cleanupState(); },
+  async markCleanupTested() { await chrome.storage.local.set({ cleanupTested: true }); return true; },
+  async snapshotOrders() { return snapshotOrders(); },
+  async autoBackupInfo() {
+    const { autoBackup } = await chrome.storage.local.get('autoBackup');
+    return autoBackup ? { at: autoBackup.at, count: autoBackup.orders.length } : null;
+  },
+  async restoreAutoBackup() {
+    const { autoBackup } = await chrome.storage.local.get('autoBackup');
+    if (!autoBackup) throw new Error('No automatic backup yet');
+    return saveOrders(autoBackup.orders.map((o) => AEX.normalizeOrder(o, null)), null);
+  },
+  async expiredOrders() { return expiredOrders(); },
+  async dismissExpired(msg) {
+    const handled = await getExpiredHandled();
+    for (const id of msg.orderIds || []) { if (msg.undo) delete handled[id]; else handled[id] = new Date().toISOString(); }
+    await chrome.storage.local.set({ expiredHandled: handled });
+    return expiredOrders();
+  },
   async markRemovedOnline(msg) {
-    const removed = await getRemovedOnline();
     const at = new Date().toISOString();
+    if (msg.notListed) {
+      // Not in the online list at all (e.g. imported from Gmail, or deleted on AliExpress): skip from now on.
+      const { notListedOnline = {} } = await chrome.storage.local.get('notListedOnline');
+      for (const id of msg.orderIds || []) notListedOnline[id] = at;
+      await chrome.storage.local.set({ notListedOnline });
+      return Object.keys(notListedOnline).length;
+    }
+    const removed = await getRemovedOnline();
     for (const id of msg.orderIds || []) removed[id] = at;
     await chrome.storage.local.set({ removedOnline: removed });
     return Object.keys(removed).length;
@@ -271,6 +373,15 @@ const handlers = {
     const ids = msg.productIds || (msg.productId ? [msg.productId] : []);
     const perProduct = {};
     for (const id of ids) perProduct[id] = AEX.purchaseHistory(orders, { productId: id, title: msg.titles && msg.titles[id], minSimilarity: settings.similarityThreshold });
+    // Expired (never shipped) orders of these products: worth re-ordering, refund pending.
+    const handled = await getExpiredHandled();
+    for (const o of orders) {
+      if (!AEX.isExpired(o) || handled[o.orderId]) continue;
+      for (const it of o.items || []) {
+        if (!perProduct[it.productId]) continue;
+        (perProduct[it.productId].expired = perProduct[it.productId].expired || []).push({ ...expiredSummary(o, settings), quantity: it.quantity, variant: it.variant });
+      }
+    }
     return { perProduct, hasData: orders.length > 0 };
   },
   async importOrders(msg) {
@@ -280,6 +391,7 @@ const handlers = {
     return saveOrders(orders.map((o) => AEX.normalizeOrder(o, null)), null);
   },
   async clearAll() {
+    await snapshotOrders();
     await chrome.storage.local.remove(['orders', 'lastPushAt', 'lastPushResult', 'lastSavedAt', 'lastFullSync']);
     updateBadge({});
     return true;
@@ -316,6 +428,27 @@ chrome.runtime.onInstalled.addListener(async () => {
     }
     await chrome.storage.local.set({ migratedMoneyV6: true });
   }
+  // v1.1: closed orders get a close reason (expired = never shipped), a closing date and refund
+  // tracking; clean-up now includes cancelled orders by default.
+  const { migratedCloseV11 } = await chrome.storage.local.get('migratedCloseV11');
+  if (!migratedCloseV11) {
+    for (const [id, o] of Object.entries(map)) {
+      if (o.status !== 'closed' || o.closeReason) continue;
+      const n = AEX.normalizeOrder({ ...o, closedAt: null }, null);
+      Object.assign(o, { closeReason: n.closeReason, closeReasonText: n.closeReasonText, closedAt: n.closedAt, closedAtEstimated: true, refundedAt: null });
+      map[id] = o;
+      fixed++;
+    }
+    const { settings } = await chrome.storage.local.get('settings');
+    if (settings && settings.cleanupCancelled === false) await chrome.storage.local.set({ settings: { ...settings, cleanupCancelled: true } });
+    await chrome.storage.local.set({ migratedCloseV11: true });
+  }
+  // v1.1.1: an earlier 1.1 build couldn't read "Ref. Number:" cards and may have marked listed
+  // orders as "not in the online list". Forget those marks once.
+  const { migratedNotListedV111 } = await chrome.storage.local.get('migratedNotListedV111');
+  if (!migratedNotListedV111) await chrome.storage.local.set({ notListedOnline: {}, migratedNotListedV111: true });
+  // Anyone who has already removed an order has done the one-order test.
+  if (Object.keys(await getRemovedOnline()).length) await chrome.storage.local.set({ cleanupTested: true });
   for (const o of Object.values(map)) {
     const before = JSON.stringify([o.shipping, o.total]);
     AEX.sanitizeOrder(o);

@@ -1,6 +1,6 @@
 {
   "name": "cart-compass",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Keeps a private record of every AliExpress order, warns before you buy something twice, and syncs to Google Sheets.",
   "scripts": {

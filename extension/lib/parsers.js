@@ -174,7 +174,9 @@
     const all = spacedText(card);
     const header = q(card, SELECTORS.orderHeader) || card;
     const headerText = txt(header);
-    let orderId = (headerText.match(/Order\s*(?:ID|No\.?|number)\s*[:：]?\s*(\d{10,})/i) || all.match(/Order\s*(?:ID|No\.?|number)\s*[:：]?\s*(\d{10,})/i) || [])[1];
+    // "Order ID: 8214…", or "Ref. Number: 8214…" on newer cards.
+    const ID_RE = /(?:Order\s*(?:ID|No\.?|number)|Ref(?:erence)?\.?\s*(?:Number|No\.?))\s*[:：]?\s*(\d{10,})/i;
+    let orderId = (headerText.match(ID_RE) || all.match(ID_RE) || [])[1];
     if (!orderId) {
       const a = card.querySelector('a[href*="orderId="]');
       orderId = a && AEX.orderIdFromUrl(a.getAttribute('href'));
@@ -210,6 +212,37 @@
       total: totalMoney ? totalMoney.amount : null,
       currency: (totalMoney && totalMoney.currency) || (items[0] && items[0].currency) || null,
       items,
+      ...closeNotes(all),
+    };
+  }
+
+  const REFUND_AMOUNT_RE = new RegExp('(?:refund(?:ed)?(?:\\s*amount|\\s*total)?|total refund)\\s*[:：]?\\s*(' + MONEY + ')', 'i');
+  const REFUND_PENDING_RE = /refund(?:ing)?\s*(?:is\s*)?(?:in progress|pending|processing|requested|under review)/i;
+
+  /**
+   * Why a closed order was closed, and whether its refund went through, from the page text.
+   * Returns {closeReasonText, refundedAt} (each null when not found).
+   */
+  function closeNotes(text) {
+    const t = AEX.cleanText(text || '');
+    const m = t.match(AEX.EXPIRED_TEXT_RE);
+    let reason = null;
+    if (m) {
+      // The sentence around the match, e.g. "...has not shipped in the required time."
+      const start = Math.max(0, t.lastIndexOf('.', m.index) + 1);
+      const end = t.indexOf('.', m.index + m[0].length);
+      reason = t.slice(start, end < 0 ? m.index + m[0].length + 60 : end).trim().slice(0, 160);
+    }
+    // Refund shown on the order page: "Refund successful", or a refund line with an amount
+    // ("Refund amount: US $4.86"), but not while it's still "in progress"/"pending".
+    const amountM = t.match(REFUND_AMOUNT_RE);
+    const pending = REFUND_PENDING_RE.test(t);
+    const refunded = AEX.REFUNDED_RE.test(t) || (!!amountM && !pending);
+    const amount = amountM ? AEX.parseMoney(amountM[1]) : null;
+    return {
+      closeReasonText: reason,
+      refundedAt: refunded ? new Date().toISOString() : null,
+      refundAmount: refunded && amount ? amount.amount : null,
     };
   }
 
@@ -306,6 +339,7 @@
       discount,
       items: items.map(({ _currency, ...it }) => it),
       tracking,
+      ...closeNotes(all),
       detailFetchedAt: new Date().toISOString(),
     }, 'web-detail');
   }
@@ -397,7 +431,7 @@
     return null;
   }
 
-  const api = { SELECTORS, parseOrderList, parseOrderCard, findOrderCards, findLoadMoreButton, findDeleteControl, findConfirmButton, parseOrderDetail, debugSample };
+  const api = { SELECTORS, closeNotes, parseOrderList, parseOrderCard, findOrderCards, findLoadMoreButton, findDeleteControl, findConfirmButton, parseOrderDetail, debugSample };
   root.AEX = Object.assign(root.AEX || {}, api);
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this);

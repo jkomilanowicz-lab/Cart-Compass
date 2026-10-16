@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.1.0 (2026-10-16)
+
+### New
+- **Expired orders are flagged.** When a seller doesn't ship in time, AliExpress cancels the order ("has not shipped in the required time"). Those orders now show in the popup under **⚠ Expired: never shipped**, with their refund status, so you know the item isn't coming and may need re-ordering. **Re-order** opens the product, **View order** opens the order, and **Done** hides it. The product page panel mentions it too.
+- **Refund tracking** for cancelled and expired orders, read from the order page ("Refund complete", "Refund successful", refund amount) and from "Cancellation refund processed" emails in the Gmail backfill.
+- **Clean-up includes cancelled and expired orders** once their refund has cleared: either the refund shows on the order, or a wait has passed (Settings → refund wait, default 14 days). Unpaid orders go right away.
+- **Automatic local backup.** Cart Compass keeps a copy of your saved orders, refreshed before every clean-up and before *Clear local data*. Restore it from **Troubleshooting → Restore automatic backup**.
+
+### Improved
+- **Clean-up is quicker to use.** No more backup file download, the one-order test is only asked for the first time, there are no extra confirmation boxes, and closing the popup no longer resets the clean-up. Reopen it and it picks up where it left off.
+- **Clean-up reads the orders page directly** for cancelled orders: anything marked *Refund complete* is removed, even if it was never synced (it's saved first). The status line reports how many cards were checked and which cancelled orders are still waiting on a refund.
+
+### Fixed
+- Newer order cards that show **Ref. Number** instead of *Order ID* weren't recognised, so clean-up skipped them and could wrongly report them as missing from the online list. Those marks are cleared automatically on update.
+- "Refund complete" wasn't recognised as a finished refund.
+
 ## 1.0.0: Cart Compass
 - New name and icon: **Cart Compass**, order history & re-order alerts for AliExpress.
 - First Chrome Web Store release. Permissions are kept to a minimum: AliExpress pages, plus optional access to Google Apps Script for sheet sync.

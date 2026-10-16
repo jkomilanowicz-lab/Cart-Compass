@@ -182,12 +182,18 @@ try {
 
   // 4c. Clean-up: delete the completed, fully recorded order from the online list; keep it locally.
   await sw.evaluate(() => chrome.storage.local.get('settings').then(({ settings }) => chrome.storage.local.set({ settings: { ...settings, cleanupMinAgeDays: 0 } })));
+  // An old cancelled order known only from Gmail: eligible, but not in the online list.
+  await popup.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: 'saveOrders', origin: 'gmail', orders: [
+    { orderId: '9213000000000001', orderDate: '2025-01-05', statusText: 'closed', items: [] }] }, r)));
   popup.on('dialog', (d) => d.accept());
+  let downloads = 0;
+  popup.on('download', () => downloads++);
   await popup.click('#btnCleanPlan');
   await waitFor(async () => /can be removed|Nothing to remove|failed/.test(await popup.textContent('#cleanStatus')), 'clean-up plan');
   const planText = await popup.textContent('#cleanStatus');
-  assert.match(planText, /^1 order older than 0 days can be removed/, planText);
+  assert.match(planText, /^2 orders can be removed \(1 completed, older than 0 days; 1 cancelled, refund cleared\)/, planText);
   assert.match(planText, /1 details not fetched/);
+  assert.match(planText, /1 cancelled, waiting for the refund/, 'a just-cancelled order waits for its refund');
   await popup.click('#btnCleanOne');
   await waitFor(async () => /Removed \d/.test(await popup.textContent('#cleanStatus')), 'clean-up run');
   assert.match(await popup.textContent('#cleanStatus'), /Removed 1 from the AliExpress list/);
@@ -195,6 +201,65 @@ try {
   assert.ok((await storage('orders'))['9213971536525823'], 'order kept locally');
   assert.equal(await orders.locator('text=9213971536525823').count(), 0, 'card gone from the online list');
   console.log('✓ clean-up:', (await popup.textContent('#cleanStatus')).trim());
+  assert.equal(downloads, 0, 'no backup file download');
+  assert.ok((await storage('autoBackup')).orders.length >= 3, 'automatic local backup taken');
+  // Closing and reopening the popup keeps the plan, and the test isn't asked for again.
+  await popup.reload();
+  await popup.waitForSelector('#btnCleanAll:not(.hidden)', { timeout: 10000 });
+  assert.ok(await popup.locator('#btnCleanOne').evaluate((b) => b.classList.contains('hidden')), 'test button not shown again');
+  assert.match(await popup.textContent('#cleanStatus'), /Removed 1 from the AliExpress list/, 'status survives reopening');
+  assert.match(await popup.textContent('#btnCleanAll'), /^Remove 1 order$/);
+  console.log('✓ clean-up state survives closing the popup; no backup download');
+  // The rest: the Gmail-only order isn't in the online list, so it's skipped from now on.
+  await popup.waitForSelector('#btnCleanAll:not(.hidden)');
+  await popup.click('#btnCleanAll');
+  await waitFor(async () => /weren't in your online list/.test(await popup.textContent('#cleanStatus')), 'not-listed order reported', 60000);
+  assert.ok((await storage('notListedOnline'))['9213000000000001']);
+  await popup.click('#btnCleanPlan');
+  await waitFor(async () => /can be removed|Nothing to remove|may still be waiting/.test(await popup.textContent('#cleanStatus')), 'second plan');
+  assert.match(await popup.textContent('#cleanStatus'), /^1 cancelled order may still be waiting for a refund/, 'the missing order is not offered again');
+  console.log('✓ clean-up skips orders not in the online list:', (await popup.textContent('#cleanStatus')).trim().slice(0, 100));
+
+  // Cancelled + "Refund complete" on the page: removed whatever the saved copy says. One was saved
+  // before its refund showed; the other was never saved, and its banner sits just after the card.
+  await orders.evaluate(() => {
+    const addRemove = (card) => {
+      const btn = Object.assign(document.createElement('button'), { textContent: 'Remove' });
+      btn.onclick = () => setTimeout(() => { card.nextElementSibling && card.nextElementSibling.classList.contains('refund-bar') && card.nextElementSibling.remove(); card.remove(); }, 400);
+      card.appendChild(btn);
+    };
+    const card = [...document.querySelectorAll('.order-item')].find((c) => c.textContent.includes('9215467591000002'));
+    card.insertAdjacentHTML('beforeend', '<div class="refund-bar"><b>Refund complete</b> AliExpress processing complete.</div>');
+    addRemove(card);
+    const unsaved = card.cloneNode(true);
+    unsaved.innerHTML = unsaved.innerHTML.replaceAll('9215467591000002', '9213863141645823').replace(/Closed/g, 'Canceled');
+    unsaved.querySelector('.refund-bar').remove();
+    unsaved.querySelector('button:last-of-type').remove();
+    addRemove(unsaved);
+    card.parentElement.appendChild(unsaved);
+    unsaved.insertAdjacentHTML('afterend', '<div class="refund-bar"><b>Refund complete</b> Refund by financial institution will be processed in 2-3 business days.</div>');
+  });
+  assert.equal(await popup.textContent('#btnCleanAll'), 'Remove refunded cancelled orders');
+  await popup.click('#btnCleanAll');
+  await waitFor(async () => /Removed \d/.test(await popup.textContent('#cleanStatus')), 'refund check run', 60000);
+  assert.match(await popup.textContent('#cleanStatus'), /Removed 2 from the AliExpress list/, await popup.textContent('#cleanStatus'));
+  assert.ok((await storage('removedOnline'))['9215467591000002'], 'refund seen on the page: removed');
+  assert.ok((await storage('orders'))['9215467591000002'].refundedAt, 'refund saved');
+  assert.ok((await storage('removedOnline'))['9213863141645823'], 'unsaved cancelled order removed');
+  assert.ok((await storage('orders'))['9213863141645823'], 'and saved first');
+  console.log('✓ clean-up removes a cancelled order whose card shows "Refund complete"');
+
+  // 4d. An order the seller never shipped ("expired") is flagged in the popup until marked done.
+  await popup.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: 'saveOrders', origin: 'web-detail', orders: [{
+    orderId: '9215467591000003', orderDate: '2026-10-02', statusText: 'Closed', closeReasonText: 'has not shipped in the required time',
+    items: [{ title: 'ESP32-S3-WROOM-1 N16R8 module', productId: '1005007777777777', quantity: 1, productUrl: 'https://www.aliexpress.com/item/1005007777777777.html' }],
+  }] }, r)));
+  await popup.reload();
+  await popup.waitForSelector('#expiredBox:not(.hidden)', { timeout: 10000 });
+  const expText = (await popup.textContent('#expiredBox')).replace(/\s+/g, ' ');
+  assert.match(expText, /ESP32-S3-WROOM-1 N16R8 module ×1/);
+  assert.match(expText, /refund expected by/);
+  console.log('✓ expired order flagged:', expText.trim().slice(0, 140));
 
   // 5. Product page shows what you've already ordered.
   const product = await context.newPage();
@@ -211,6 +276,7 @@ try {
   const otherText = await (await other.waitForSelector('.aex-panel', { timeout: 15000 })).textContent();
   assert.match(otherText, /likely ordered this from another store: 3 units in 1 order/);
   assert.match(otherText, /Same item from other stores/);
+  assert.match(otherText, /Never shipped: your order of ×1 on 2026-10-02 expired/);
   console.log('✓ other-store panel:', otherText.replace(/\s+/g, ' ').trim());
   await other.close();
   await popup.setViewportSize({ width: 380, height: 640 });

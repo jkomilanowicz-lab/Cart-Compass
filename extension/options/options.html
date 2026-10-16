@@ -39,8 +39,9 @@
   <fieldset>
     <legend>Clean up AliExpress order list</legend>
     <label>Only remove orders older than (days) <input id="cleanupMinAgeDays" type="number" min="0" max="3650"></label>
-    <label class="check"><input id="cleanupCancelled" type="checkbox"> Also remove cancelled/closed orders</label>
-    <p class="muted">Clean-up deletes completed orders from your online AliExpress list, but only after they're fetched in full and confirmed in your Google Sheet. They stay saved in this extension and in the sheet.</p>
+    <label class="check"><input id="cleanupCancelled" type="checkbox"> Also remove cancelled and expired orders (after their refund has cleared)</label>
+    <label>Days to allow for a refund after an order is cancelled <input id="refundWaitDays" type="number" min="0" max="365"></label>
+    <p class="muted">Clean-up deletes completed orders from your online AliExpress list, but only after they're fetched in full and confirmed in your Google Sheet. Cancelled and expired orders go once their refund shows on the order page, or once this many days have passed since they closed (unpaid orders right away). Everything stays saved in this extension. Expired orders (the seller didn't ship in time) stay flagged in the popup until you mark them done.</p>
   </fieldset>
 
   <script src="options.js"></script>

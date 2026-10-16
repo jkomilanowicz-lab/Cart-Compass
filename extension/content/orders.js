@@ -122,25 +122,66 @@
     return { ok: false, error: confirmed ? 'order still listed after confirming' : 'no confirmation dialog appeared' };
   }
 
-  /** Delete the given orders from the AliExpress list, loading more orders as needed to find them. */
-  async function cleanupOrders({ orderIds = [], maxConsecutiveFailures = 3 } = {}) {
+  /**
+   * Delete the given orders from the AliExpress list, loading more orders as needed to find them.
+   * limit: stop after this many deletions (the "test" run uses 1: the first eligible order on the page).
+   * Orders still missing once the whole list has loaded are reported in notListed.
+   */
+  async function cleanupOrders({ orderIds = [], checkIds = [], sweepCancelled = false, maxConsecutiveFailures = 3, limit = Infinity } = {}) {
     if (syncing) return { error: 'A sync is already running on this tab' };
     syncing = true;
     const pending = new Set(orderIds.map(String));
+    // Cancelled orders still waiting for their refund as far as we know: removed only if their
+    // card says the refund is complete (the saved copy may predate that).
+    const check = new Set(checkIds.map(String).filter((id) => !pending.has(id)));
+    const total = pending.size + check.size;
     const removed = [], failed = [];
-    let streak = 0, stopped = null;
+    let streak = 0, stopped = null, exhausted = false, unreadable = 0;
     const progress = () => {
-      showToast(`Cleaning up… removed ${removed.length} of ${orderIds.length}${failed.length ? ` · ${failed.length} failed` : ''}`);
-      notify({ type: 'cleanupProgress', removed: removed.length, failed: failed.length, total: orderIds.length });
+      showToast(`Cleaning up… removed ${removed.length}${failed.length ? ` · ${failed.length} failed` : ''}`);
+      notify({ type: 'cleanupProgress', removed: removed.length, failed: failed.length, total });
+    };
+    // The page decides for cancelled orders: whatever the saved copy says (not saved yet, refund
+    // not seen yet, marked removed earlier), a card that reads cancelled + refund complete goes.
+    const seen = new Set();
+    const waiting = []; // cancelled cards whose refund isn't complete yet
+    const cancelledCard = (card) => {
+      try {
+        const raw = AEX.parseOrderCard(card);
+        if (!raw) return null;
+        // Some layouts put the refund banner just after the card.
+        const next = card.nextElementSibling;
+        if (next && !AEX.findOrderCards(next).length && !next.matches(AEX.SELECTORS.orderCard.join(','))) {
+          const extra = AEX.closeNotes(next.textContent);
+          if (extra.refundedAt && !raw.refundedAt) Object.assign(raw, { refundedAt: extra.refundedAt, refundAmount: raw.refundAmount || extra.refundAmount });
+        }
+        const o = AEX.normalizeOrder(raw, 'web-list');
+        if (!AEX.isCancelled(o)) return null;
+        return { raw, done: !!(o.refundedAt || o.closeReason === 'unpaid') };
+      } catch (_) { return null; }
     };
     try {
       for (let i = 0; i < 40 && !AEX.findOrderCards(document).length; i++) await sleep(500);
       progress();
-      outer: while (pending.size) {
-        const targets = AEX.findOrderCards(document).map((c) => [c, cardOrderId(c)]).filter(([, id]) => id && pending.has(id));
+      outer: while ((pending.size || check.size || sweepCancelled) && removed.length < limit) {
+        const cards = AEX.findOrderCards(document).map((c) => [c, cardOrderId(c)]);
+        unreadable = cards.filter(([, id]) => !id).length;
+        const targets = [];
+        for (const [card, id] of cards) {
+          if (!id) continue;
+          if (pending.has(id)) { targets.push([card, id]); continue; }
+          if (seen.has(id) || !(check.has(id) || sweepCancelled)) continue;
+          seen.add(id);
+          check.delete(id);
+          const c = cancelledCard(card);
+          if (!c) continue;
+          await send({ type: 'saveOrders', orders: [c.raw], origin: 'web-list' }); // keep the record first
+          if (c.done) targets.push([card, id]);
+          else waiting.push(id);
+        }
         if (!targets.length) {
           const btn = AEX.findLoadMoreButton(document);
-          if (!btn || btn.disabled) break;
+          if (!btn || btn.disabled) { exhausted = true; break; } // whole list loaded
           const before = AEX.findOrderCards(document).length;
           btn.scrollIntoView({ block: 'center' });
           btn.click();
@@ -148,7 +189,9 @@
           continue;
         }
         for (const [card, id] of targets) {
+          if (removed.length >= limit) break outer;
           pending.delete(id);
+          if (!card.isConnected) continue;
           const r = await deleteCard(card, id);
           if (r.ok) {
             removed.push(id);
@@ -162,9 +205,12 @@
           await sleep(1000 + Math.random() * 800); // be gentle
         }
       }
-      const notFound = stopped ? [] : [...pending];
-      showToast(`Clean-up done: removed ${removed.length}${failed.length ? `, ${failed.length} failed` : ''}${notFound.length ? `, ${notFound.length} not found` : ''}.`, 8000);
-      return { removed: removed.length, removedIds: removed, failed, notFound, stopped };
+      // Only "not in the list" when the whole list was loaded, every card's order number could be
+      // read, and they still weren't there.
+      const notListed = exhausted && !stopped && !unreadable ? [...pending] : [];
+      if (notListed.length) await send({ type: 'markRemovedOnline', orderIds: notListed, notListed: true });
+      showToast(`Clean-up done: removed ${removed.length}${failed.length ? `, ${failed.length} failed` : ''}${notListed.length ? `, ${notListed.length} not in the online list` : ''}.`, 8000);
+      return { removed: removed.length, removedIds: removed, failed, notListed, notFound: notListed, stopped, unreadable, missing: exhausted && unreadable ? pending.size : 0, scanned: AEX.findOrderCards(document).length, waiting };
     } finally {
       syncing = false;
     }

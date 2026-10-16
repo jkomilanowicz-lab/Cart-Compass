@@ -1,6 +1,6 @@
 /* Settings page: opens in a tab, so it doesn't close when focus moves (unlike the popup). */
 const $ = (id) => document.getElementById(id);
-const TEXT = ['sheetUrl', 'sheetKey', 'sheetViewUrl', 'detailBatchLimit', 'cleanupMinAgeDays'];
+const TEXT = ['sheetUrl', 'sheetKey', 'sheetViewUrl', 'detailBatchLimit', 'cleanupMinAgeDays', 'refundWaitDays'];
 const CHECKS = ['autoSheetSync', 'ignoreCancelled', 'cleanupCancelled'];
 
 function bg(type, extra = {}) {
@@ -20,6 +20,8 @@ function readForm() {
   s.detailBatchLimit = Math.max(1, parseInt(s.detailBatchLimit, 10) || 150);
   const age = parseInt(s.cleanupMinAgeDays, 10);
   s.cleanupMinAgeDays = Number.isFinite(age) && age >= 0 ? age : 30;
+  const wait = parseInt(s.refundWaitDays, 10);
+  s.refundWaitDays = Number.isFinite(wait) && wait >= 0 ? wait : 14;
   return s;
 }
 

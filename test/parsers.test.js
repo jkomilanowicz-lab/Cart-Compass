@@ -313,3 +313,88 @@ test('findDeleteControl / findConfirmButton locate the clean-up controls', () =>
   assert.equal(parsers.findConfirmButton(dlg).id, 'yes');
   assert.equal(parsers.findConfirmButton(new JSDOM('<p>nothing</p>').window.document), null);
 });
+
+test('closed orders: close reason, closing date and refund tracking', () => {
+  const day = 86400000;
+  // Expired = the seller didn't ship in time (AliExpress wording), from status or page text.
+  assert.equal(core.closeReasonOf('has not shipped in the required time'), 'expired');
+  assert.equal(core.closeReasonOf('Order canceled due to late shipment'), 'expired');
+  assert.equal(core.closeReasonOf('Expired'), 'expired');
+  assert.equal(core.closeReasonOf('Payment not received'), 'unpaid');
+  assert.equal(core.closeReasonOf('Closed'), null);
+  assert.equal(core.normalizeStatus('Expired'), 'closed');
+
+  // A bare "expired" elsewhere on a page (a coupon) doesn't count; the specific wording does.
+  assert.equal(parsers.closeNotes('Closed. Your coupon expired.').closeReasonText, null);
+  const notes = parsers.closeNotes("Order closed. We're sorry, your order 9214676116065823 has not shipped in the required time. Refund confirmed: 4.86USD has been credited to your original payment method.");
+  assert.match(notes.closeReasonText, /has not shipped in the required time$/);
+  assert.ok(notes.refundedAt);
+
+  // First seen already closed: closing date estimated (old order → orderDate + 30 days).
+  const old = core.normalizeOrder({ orderId: '9215467591000101', orderDate: '2026-01-10', statusText: 'Closed' }, 'web-list');
+  assert.deepEqual([old.closeReason, old.closedAt.slice(0, 10), old.closedAtEstimated], ['cancelled', '2026-02-09', true]);
+  assert.equal(core.refundCleared(old, 14), true);
+
+  // An open order that turns closed is dated now; refund pending until the wait passes or it's seen.
+  const open = core.normalizeOrder({ orderId: '9215467591000102', orderDate: '2026-10-01', statusText: 'Awaiting shipment' }, 'web-list');
+  assert.equal(open.closedAt, undefined);
+  const closed = core.mergeOrder(open, core.normalizeOrder({ orderId: '9215467591000102', statusText: 'Closed', closeReasonText: 'has not shipped in the required time' }, 'web-detail'));
+  assert.equal(closed.closeReason, 'expired');
+  assert.equal(closed.closedAtEstimated, false);
+  assert.ok(Date.now() - Date.parse(closed.closedAt) < 5000);
+  assert.ok(core.isExpired(closed));
+  assert.equal(core.refundCleared(closed, 14), false);
+  assert.equal(core.refundCleared(closed, 14, Date.now() + 15 * day), true);
+  // Later reads keep the closing date and the stronger reason; a refund clears it at once.
+  const later = core.mergeOrder(closed, core.normalizeOrder({ orderId: '9215467591000102', statusText: 'Closed', refundedAt: '2026-10-11T00:00:00.000Z' }, 'web-detail'));
+  assert.deepEqual([later.closedAt, later.closeReason, later.refundedAt], [closed.closedAt, 'expired', '2026-10-11T00:00:00.000Z']);
+  assert.equal(core.refundCleared(later, 14), true);
+  // Unpaid orders owe nothing.
+  assert.equal(core.refundCleared(core.normalizeOrder({ orderId: '9215467591000103', statusText: 'Closed: payment not received' }, 'web-list'), 14), true);
+});
+
+test('Gmail: late-shipment cancellations and cancellation refunds', () => {
+  const late = email.parseStatusEmail({ subject: 'Order canceled due to late shipment', date: '2026-10-14T21:56:17Z',
+    body: "| Order canceled Hi, We're sorry, your order 9215467591000104[](https://www.aliexpress.com/p/order/detail.html?orderId=9215467591000104) has not shipped in the required time. |" })[0];
+  assert.deepEqual([late.orderId, late.status, late.closeReason, late.closedAt], ['9215467591000104', 'closed', 'expired', '2026-10-14T21:56:17Z']);
+  const refund = email.parseStatusEmail({ subject: 'Cancellation refund processed', date: '2026-10-11T06:43:01Z',
+    body: 'Refund confirmed Hi, 4.86USD has been credited to your original payment method on 2026-10-11. View details[](https://aliexpress.com/p/reverse-pages/detail.html?tradeOrderId=9215467591000104&refundOnly=1)' })[0];
+  assert.deepEqual([refund.orderId, refund.refundedAt.slice(0, 10)], ['9215467591000104', '2026-10-11']);
+  // Ordinary (partial) refunds on delivered orders are not cancellations.
+  assert.equal(email.parseSubject('Refund processed'), null);
+});
+
+test('refunds shown on a closed order page', () => {
+  const r = (t) => { const n = parsers.closeNotes(t); return [!!n.refundedAt, n.refundAmount]; };
+  assert.deepEqual(r('Order closed. Refund amount: US $4.86'), [true, 4.86]);
+  assert.deepEqual(r('Order closed. Refunded US $12.30 to your card'), [true, 12.3]);
+  assert.deepEqual(r('Closed. Refund successful'), [true, null]);
+  assert.deepEqual(r('Closed. Refund in progress. Refund amount: US $4.86'), [false, null], 'pending refunds don\'t count');
+  assert.deepEqual(r('Closed. Total US $4.86'), [false, null]);
+  const o = core.normalizeOrder({ orderId: '9215467591000105', statusText: 'Closed', ...parsers.closeNotes('Order closed. Your order has not shipped in the required time. Refund amount: US $4.86') }, 'web-detail');
+  assert.deepEqual([o.closeReason, o.refundAmount, core.refundCleared(o, 14)], ['expired', 4.86, true]);
+});
+
+test('newer order cards: "Ref. Number", "Canceled", "Refund complete", Remove button', () => {
+  const html = `<div class="order-item">
+    <div class="order-item-header"><div class="order-item-header-status"><span class="order-item-header-status-text">Canceled</span></div>
+      <div class="order-item-header-right"><div>Date: Sep 6, 2026</div><div>Ref. Number: 9214882712945823 <span>Copy</span></div><a href="#">Details</a></div></div>
+    <div class="order-item-store"><span class="order-item-store-name">CY1122 Store</span></div>
+    <div class="order-item-content"><div class="order-item-content-body">
+      <a href="https://www.aliexpress.com/item/1005001111111111.html"><img src="https://ae01.alicdn.com/kf/x.jpg"></a>
+      <div class="order-item-content-info"><div class="order-item-content-info-name"><span>1600/127pcs Heat-shrink Tubing</span></div>
+        <div class="order-item-content-info-sku">164PCS no Box</div><div class="order-item-content-info-number"><span>$1.59</span><span>x1</span></div>
+        <div>$1 coupon if delayed</div></div></div>
+      <div class="order-item-content-opt"><span class="order-item-content-opt-price-total">Total:$1.52</span><button>Add to cart</button><button>Remove</button></div></div>
+    <div class="refund-bar"><b>Refund complete</b> AliExpress processing complete. Refund by financial institution will be processed in 2-3 business days.</div>
+  </div>`;
+  const card = new JSDOM(html).window.document.querySelector('.order-item');
+  const raw = parsers.parseOrderCard(card);
+  assert.equal(raw.orderId, '9214882712945823');
+  const o = core.normalizeOrder(raw, 'web-list');
+  assert.deepEqual([o.status, o.orderDate, o.closeReason], ['closed', '2026-09-06', 'cancelled']);
+  assert.ok(o.refundedAt, '"Refund complete" counts as refunded');
+  assert.equal(core.refundCleared(o, 14), true, 'eligible for clean-up right away');
+  const del = parsers.findDeleteControl(card);
+  assert.equal(del.textContent.trim(), 'Remove');
+});

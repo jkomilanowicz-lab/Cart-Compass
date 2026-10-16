@@ -40,11 +40,16 @@
     if (!res || !res.hasData) return;
     const { exact, similar } = res.perProduct[productId];
     const likely = res.perProduct[productId].likely || { units: 0, orders: 0, inTransitUnits: 0 };
-    if (!exact.units && !similar.length) return;
+    const expired = res.perProduct[productId].expired || [];
+    if (!exact.units && !similar.length && !expired.length) return;
 
     const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
     const inTransit = exact.inTransitUnits + likely.inTransitUnits;
-    const level = inTransit ? 'warn' : (exact.units || likely.units) ? 'info' : 'soft';
+    const level = inTransit || expired.length ? 'warn' : (exact.units || likely.units) ? 'info' : 'soft';
+    const day = (iso) => (iso ? String(iso).slice(0, 10) : '?');
+    // Orders of this product that the seller never shipped: nothing is coming, a refund is due.
+    const expiredHtml = expired.map((e) => `<div class="aex-alert">Never shipped: your order of ×${esc(e.quantity || 1)}${e.variant ? ` (${esc(e.variant)})` : ''} on ${esc(e.orderDate || '?')} expired, the seller didn't ship in time. ${
+      e.refundedAt ? `Refunded ${esc(day(e.refundedAt))}.` : `Refund expected by ${esc(day(e.refundDueAt))}.`}</div>`).join('');
     const lines = exact.lines.slice(0, 6).map((l) =>
       `<li><b>×${esc(l.quantity)}</b> ${esc(l.variant || '')} <span class="aex-muted">${esc(l.orderDate || '')} · ${esc(STATUS_LABEL[l.status] || l.status)}</span></li>`).join('');
     const simLi = (s) =>
@@ -56,13 +61,14 @@
       ? `You've ordered this before: <b>${exact.units}</b> unit${exact.units === 1 ? '' : 's'} in ${plural(exact.orders, 'order')}`
       : likely.units
         ? `You've likely ordered this from another store: <b>${likely.units}</b> unit${likely.units === 1 ? '' : 's'} in ${plural(likely.orders, 'order')}`
-        : 'Possibly similar to things you ordered';
+        : expired.length ? 'You tried to order this before' : 'Possibly similar to things you ordered';
 
     const panel = document.createElement('div');
     panel.className = `aex-panel aex-${level}`;
     panel.innerHTML = `
       <button class="aex-close" title="Hide">×</button>
       <div class="aex-title">${heading}</div>
+      ${expiredHtml}
       ${inTransit ? `<div class="aex-alert">${inTransit} still on the way</div>` : ''}
       ${lines ? `<ul>${lines}</ul>` : ''}
       ${same ? `<div class="aex-section"><div class="aex-h">Same item from other stores${exact.units && likely.units ? ` (${likely.units} more)` : ''}</div><ul>${same}</ul></div>` : ''}

@@ -12,6 +12,12 @@
 
   <section id="stats" class="stats"></section>
 
+  <section id="expiredBox" class="hidden">
+    <h2>⚠ Expired: never shipped</h2>
+    <p class="muted">The seller didn't ship these in time, so AliExpress cancelled them. Nothing is on the way: re-order anything you still need. A refund is due on each.</p>
+    <ul id="expiredList" class="exp"></ul>
+  </section>
+
   <section>
     <h2>Sync from AliExpress</h2>
     <div class="row">
@@ -50,11 +56,11 @@
 
   <section>
     <h2>Clean up AliExpress order list</h2>
-    <p class="muted">Deletes old completed orders from your <em>online</em> AliExpress order list once they're confirmed in your Google Sheet, so the list (and every sync) stays short. They stay saved here and in the sheet, so re-order warnings keep working.</p>
+    <p class="muted">Deletes old completed orders from your <em>online</em> AliExpress order list once they're confirmed in your Google Sheet, and cancelled or expired orders once their refund has had time to clear. The list (and every sync) stays short; everything stays saved here, so re-order warnings keep working.</p>
     <div class="row">
       <button id="btnCleanPlan" class="ghost">Find orders to remove</button>
       <button id="btnCleanOne" class="hidden">Remove 1 (test)</button>
-      <button id="btnCleanAll" class="danger hidden">Remove all</button>
+      <button id="btnCleanAll" class="danger hidden">Remove orders</button>
     </div>
     <p id="cleanStatus" class="muted"></p>
   </section>
@@ -68,6 +74,7 @@
     <p class="muted">If orders or prices aren't detected correctly, open the AliExpress page in question, click below, and attach the result to a GitHub issue. Personal details are filtered out, but skim it before sharing.</p>
     <div class="row">
       <button id="btnSample" class="ghost">Copy page sample</button>
+      <button id="btnRestore" class="ghost hidden">Restore automatic backup</button>
       <button id="btnClear" class="danger">Clear local data</button>
     </div>
   </details>

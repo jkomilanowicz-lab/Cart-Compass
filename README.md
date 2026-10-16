@@ -107,17 +107,31 @@ Later on, **Quick sync** picks up new orders and stops as soon as it reaches ord
 After a few hundred orders, *My Orders* takes many "View orders" clicks to load. The clean-up deletes old orders from that **online list** after the extension has safely recorded them. Nothing is deleted from the extension or your Google Sheet, so re-order warnings keep counting those orders.
 
 1. In the popup, click **Find orders to remove**. It syncs the Google Sheet first, then asks the sheet which orders it really has.
-2. An order is only offered for removal when **all** of these hold:
-   - it's **completed** (or cancelled, if you turned that on in Settings);
+2. A **completed** order is only offered for removal when **all** of these hold:
    - it's older than the minimum age (Settings, default **30 days**);
    - its detail page has been fetched;
    - the Google Sheet has it with the same status and number of items.
-3. Click **Remove 1 (test)**. A JSON backup downloads, then the oldest eligible order is deleted on the orders page. Check the AliExpress tab.
-4. Click **Remove remaining N**. Keep the AliExpress tab open. It stops after 3 failures in a row.
 
-> **AliExpress can't undo a delete.** Keep the backup file. If clean-up can't find the delete button (AliExpress changed its page), it removes nothing. Use **Troubleshooting → Copy page sample** and open an issue.
+   A **cancelled or expired** order is offered once its refund has cleared: either the refund shows on its order page, or the refund wait has passed since it closed (Settings, default **14 days**). Unpaid orders go right away. You can turn this off in Settings.
+
+   Clean-up also checks the orders page itself: any cancelled order whose card says **Refund complete** is removed, even one Cart Compass hadn't synced yet (it's saved first). When it's done, the status line says how many order cards it checked and lists any cancelled orders still waiting on their refund.
+3. The first time, click **Remove 1 (test)**: the first eligible order found is deleted on the orders page. Check the AliExpress tab. After that the test isn't asked for again.
+4. Click **Remove N orders**. Keep the AliExpress tab open; you can close the popup and reopen it, and it picks up where it left off. It stops after 3 failures in a row.
+
+> **AliExpress can't undo a delete.** Every order removed is already in your Google Sheet, and Cart Compass keeps an automatic local backup (**Troubleshooting → Restore automatic backup**). If clean-up can't find the delete button (AliExpress changed its page), it removes nothing. Use **Troubleshooting → Copy page sample** and open an issue.
 
 If you set up the sheet with an older `Code.gs`, paste the new one and deploy a **new version** first.
+
+---
+
+## Expired orders (never shipped)
+
+When a seller doesn't ship in time, AliExpress cancels the order ("has not shipped in the required time"). Nothing is coming, but it's easy to miss. Cart Compass flags these:
+
+- **In the popup**, under **⚠ Expired: never shipped**, with the refund status (*refunded $4.86 Oct 11*, or *refund expected by Oct 29*). **Re-order** opens the product, **View order** opens the order, and **Done** hides it once you've dealt with it.
+- **On the product page**, the panel says *"Never shipped: your order of ×1 on 2026-10-02 expired"*, so you know you still don't have it.
+
+**Fetch details** reads each closed order's page once to see why it closed, then re-checks every few days until its refund shows up.
 
 ---
 

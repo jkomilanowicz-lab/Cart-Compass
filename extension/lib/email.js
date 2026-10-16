@@ -19,6 +19,9 @@
     if ((m = s.match(/^Order (\d{10,}): (?:order shipped|collected by the carrier|in transit|out for delivery)/i))) return { kind: 'shipped', orderIds: [m[1]], status: 'shipped' };
     if ((m = s.match(/^Order (\d{10,}): (?:how did it go|delivered|order completed|awaiting confirmation)/i))) return { kind: 'completed', orderIds: [m[1]], status: 'completed' };
     if ((m = s.match(/order (\d{10,}) (?:is|has been) (?:closed|cancell?ed)/i))) return { kind: 'closed', orderIds: [m[1]], status: 'closed' };
+    // The order number for these two is only in the body.
+    if (/order cancell?ed due to late shipment/i.test(s)) return { kind: 'late_shipment', orderIds: [], status: 'closed', needsBody: true };
+    if (/cancell?ation refund (?:processed|confirmed|completed)/i.test(s)) return { kind: 'refund', orderIds: [], status: 'closed', needsBody: true };
     if ((m = s.match(/Package (\S+) has been delivered/i))) return { kind: 'package_delivered', orderIds: [], trackingNumber: m[1], status: 'completed' };
     if ((m = s.match(/(?:Order|order) (\d{10,})/))) return { kind: 'other', orderIds: [m[1]], status: null };
     return null;
@@ -129,15 +132,32 @@
     }, 'gmail'));
   }
 
-  /** Status-only update derived from a non-confirmation email subject. */
+  /** Status-only update derived from a non-confirmation email (subject, plus body where needed). */
   function parseStatusEmail(msg) {
     const subj = parseSubject(msg.subject);
     if (!subj || !subj.status || /^confirmed/.test(subj.kind)) return [];
-    return subj.orderIds.map((orderId) => AEX.normalizeOrder({
+    const extra = {};
+    let orderIds = subj.orderIds;
+    if (subj.needsBody) {
+      const body = toCells(msg.body).join(' ');
+      if (subj.kind === 'late_shipment') {
+        orderIds = [(body.match(/order (\d{10,})/i) || [])[1]].filter(Boolean);
+        extra.closeReason = 'expired';
+        extra.closeReasonText = 'has not shipped in the required time';
+      } else {
+        // "View details" links carry tradeOrderId=…; "credited … on 2026-10-11".
+        orderIds = [(body.match(/tradeOrderId=(\d{10,})/) || body.match(/order (\d{10,})/i) || [])[1]].filter(Boolean);
+        const d = body.match(/credited[^.]*? on (\d{4}-\d{2}-\d{2})/i);
+        extra.refundedAt = d ? new Date(`${d[1]}T12:00:00Z`).toISOString() : (msg.date || new Date().toISOString());
+      }
+      if (msg.date) extra.closedAt = msg.date;
+    }
+    return orderIds.map((orderId) => AEX.normalizeOrder({
       orderId,
       statusText: subj.kind.replace(/_/g, ' '),
       status: subj.status,
       items: [],
+      ...extra,
     }, 'gmail'));
   }
 

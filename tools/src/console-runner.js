@@ -33,6 +33,6 @@
   console.table(orders.slice(0, 20).map((o) => ({ orderId: o.orderId, date: o.orderDate, status: o.status, items: o.items.length, total: o.total })));
   window.AEX_LAST_EXPORT = orders;
   if (!orders.length || orders.some((o) => !o.items.length)) {
-    console.warn('[AEX] Some orders had no items detected. Run  copy(AEX.debugSample())  and paste the clipboard to Claude to fix the selectors.');
+    console.warn('[AEX] Some orders had no items detected. Run  copy(AEX.debugSample())  and attach the clipboard to a GitHub issue so the selectors can be fixed.');
   }
 })();

@@ -6,7 +6,8 @@
  * Import that file in the extension popup ("Import JSON"), or use it directly.
  * Optional: run `installDailyTrigger` once to refresh the file every day.
  */
-var QUERY = 'from:(transaction@notice.aliexpress.com) newer_than:5y';
+// Order emails, plus refund confirmations (sent from the promotions address).
+var QUERY = '(from:(transaction@notice.aliexpress.com) OR (from:(aliexpress.com) subject:refund)) newer_than:5y';
 
 function exportAliExpressOrders() {
   var map = {};
@@ -33,6 +34,8 @@ function exportAliExpressOrders() {
     AEX.mergeInto(map, AEX.parseConfirmationEmail(msg));
   });
   statuses.forEach(function (msg) {
+    // Late-shipment and refund emails name the order only in the body.
+    if (AEX.parseSubject(msg.subject).needsBody) msg.body = msg._m.getBody();
     // Status emails for orders we never saw confirmed still create a stub order.
     AEX.mergeInto(map, AEX.parseStatusEmail(msg));
   });
