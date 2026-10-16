@@ -22,8 +22,9 @@ Everything runs in your own browser, signed in to your own AliExpress account. T
 | 🔎 **Order details** | Opens each order's detail page in a background tab to collect full titles, unit prices, subtotal, shipping, tax ("Additional charges"), discounts and coupons, and tracking numbers. |
 | 💵 **Real cost per unit** | Works out a *landed unit cost* for each item (price plus its share of shipping and tax, minus discounts) and flags orders whose numbers don't add up (`totalsCheck`). |
 | 🚫 **Cancelled orders ignored** | Closed or cancelled orders are kept out of exports, the sheet and re-order warnings. You can turn this off. |
+| ⚠️ **Expired orders flagged** | Orders AliExpress cancelled because the seller never shipped are listed in the popup with their refund status, so you can re-order. |
 | 🔁 **Re-order warnings** | On product, cart and checkout pages: *"You've ordered this before: 6 units in 2 orders, 2 still on the way"*. It also catches the **same part from a different store** by matching model/part numbers (*N16R8*, *W25Q128*, *NE555*…), and lists similar items you've bought. |
-| 🧹 **Order list clean-up** | Deletes old completed orders from your online AliExpress list once they're safely recorded in your Google Sheet, so the list and every sync stay short. The extension keeps them for re-order warnings. |
+| 🧹 **Order list clean-up** | Deletes old completed orders from your online AliExpress list once they're safely recorded in your Google Sheet, and cancelled orders once their refund is complete, so the list and every sync stay short. The extension keeps them for re-order warnings. |
 | 📊 **Google Sheet sync** | A small Apps Script turns any Google Sheet into a live copy, with Orders, Items (with thumbnails and a times-ordered counter) and Sync log tabs. |
 | 📤 **Export / import** | JSON and CSV, one row per item, with order totals on every row. |
 | 📬 **Gmail backfill** *(optional)* | An Apps Script that builds a starter order list from your AliExpress emails. |
@@ -39,7 +40,7 @@ Everything runs in your own browser, signed in to your own AliExpress account. T
 ## Install
 
 ### From the Chrome Web Store
-Install **Cart Compass** from the Chrome Web Store *(link added once the listing is live)*.
+Search for **Cart Compass** on the [Chrome Web Store](https://chromewebstore.google.com/search/Cart%20Compass) and click **Add to Chrome**. Updates install automatically.
 
 ### From a release (easiest)
 1. Download `cart-compass-vX.Y.Z.zip` from the [Releases](../../releases) page and unzip it.
@@ -78,22 +79,29 @@ Later on, **Quick sync** picks up new orders and stops as soon as it reaches ord
 | Export JSON / CSV | Downloads your orders. Cancelled orders are left out by default. |
 | Import JSON | Merges a previous export or a Gmail backfill file. |
 | Sync to Google Sheet | Pushes everything to your sheet. |
-| Find orders to remove → Remove 1 (test) → Remove all | Cleans up your online AliExpress order list (see below). |
-| ⚙ Settings | Google Sheet details, *Ignore cancelled orders*, and how many detail pages to fetch per run. |
+| Open sheet | Opens your Google Sheet (when its link is set in Settings). |
+| Find orders to remove → Remove N orders | Cleans up your online AliExpress order list (see below). The first time, **Remove 1 (test)** comes first. |
+| ⚠ Expired: Re-order / View order / Done | Shown when an order was never shipped (see below). |
+| ⚙ Settings | Google Sheet details, *Ignore cancelled orders*, detail pages per run, and clean-up options (minimum age, cancelled orders, refund wait). |
+| Troubleshooting → Copy page sample | Copies an outline of the current AliExpress page for bug reports. |
+| Troubleshooting → Restore automatic backup | Brings back your saved orders from the automatic backup. |
+| Troubleshooting → Clear local data | Deletes the orders saved in this browser (an automatic backup is kept first). |
 
 ---
 
 ## Google Sheet sync
 
+Optional, but recommended: the sheet is a backup you can read, and clean-up uses it to confirm an order is recorded before removing it from AliExpress. Setup takes about 5 minutes. The **[step-by-step guide](tools/google-sheet-sync/README.md)** covers each click, the sync key, Google's authorization screens and troubleshooting. In short:
+
 1. Create a Google Sheet. Open **Extensions → Apps Script**, replace the code with [`tools/google-sheet-sync/Code.gs`](tools/google-sheet-sync/Code.gs), and save.
-2. Change `SYNC_KEY` at the top of the script to a long random string.
+2. Set your **sync key**: replace `change-me-to-a-long-random-string` in `SYNC_KEY` at the top of the script with a long random string (or add it as a Script property named `SYNC_KEY`). This is the password between the extension and your sheet.
 3. Optional: choose **setupSheets** in the function dropdown and click **Run** to create the tabs now.
-4. **Deploy → New deployment → Web app**, with *Execute as: Me* and *Who has access: Anyone*. Copy the URL that ends in `/exec`.
-5. In the extension, open **⚙ Settings** and paste the URL and key. Click **Allow access & test sheet**, then **Sync to Google Sheet** in the popup.
+4. **Deploy → New deployment → Web app**, with *Execute as: Me* and *Who has access: Anyone*. Authorize it. Google warns that it "hasn't verified this app" because it's your own script: click **Advanced → Go to … (unsafe)**. Copy the URL that ends in `/exec`.
+5. In the extension, open **⚙ Settings** and paste the URL and the same key. Click **Allow access & test sheet** and allow access to `script.google.com`, then click **Sync to Google Sheet** in the popup.
 
 ![Settings](docs/screenshot-settings.png)
 
-"Anyone" lets the extension reach the URL. The `SYNC_KEY` check is what stops anyone else from writing to your sheet. More details and troubleshooting are in [`tools/google-sheet-sync/README.md`](tools/google-sheet-sync/README.md).
+"Anyone" lets the extension reach the URL. The `SYNC_KEY` check is what stops anyone else from writing to your sheet. The key is stored only in your browser, shown masked, and never included in exports. If you later paste a newer `Code.gs`, deploy it as a **new version** (Deploy → Manage deployments → Edit → New version), or the URL keeps running the old code.
 
 **Tabs:**
 - **Orders:** status, store, item count, units, items subtotal, subtotal, shipping, tax, discount, total, `totalsCheck` (ok/mismatch), tracking, link.
